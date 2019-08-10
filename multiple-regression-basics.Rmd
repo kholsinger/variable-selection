@@ -1,0 +1,212 @@
+---
+title: "Why multiple regression is needed"
+output: html_notebook
+---
+## Introduction
+
+Before we begin exploring some ideas about variable selection in multiple regression, we need to review 
+
+* Why multiple regression may be needed and 
+* Some of the problems that arise when covariates aren't independent of one another, i.e., when they are [collinear](https://en.wikipedia.org/wiki/Multicollinearity). 
+
+It will take us a while to get through the first of these points, so that's all we'll cover in this notebook. The next notebook will take up some of the problems that arise when covariates aren't independent of one another.
+
+To do that we'll create three toy data sets in which there are 9 covariates, only 3 of which are associated with the response variable. The three data sets will have the same regression coefficients, i.e., the same intercept, the same non-zero value for the 3 covariates that have an association, and 0 for the remaining 6 covariates. They'll differ in the degree of collinearity among the covariates, ranging from complete independence of all covariates to relativelly modest collinearity to relatively strong collinearity.
+
+To get started, we'll load all of the libraries we're going to use in this session and set up sample data sets. Note: I'm going to be generating the covariate data from a multivariate normal, but that's only for convenience. Linear regression has some important assumptions. (Multi)normality of covariates is at the [bottom of the list](https://statmodeling.stat.columbia.edu/2013/08/04/19470/).
+```{r setup, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(reshape2)
+library(corrplot)
+library(ggplot2)
+library(cowplot)
+library(WVPlots)
+library(mvtnorm)
+```
+```{r}
+## I always like to clean out my workspace before running a script to make sure
+## that I'm starting R in the same state. This helps to ensure that I can 
+## reproduce my results later
+rm(list = ls())
+
+## intetcept
+##
+beta0 <- 1.0
+## regression coefficients
+##
+beta <- c(1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+## pattern of correlation matrix, all non-zero entries are set to saem
+## correlation, covariance matrix caldulated from individual variances and a 
+## single association parameter governing the non-zero correlation coefficients
+##
+## Note: Not just any pattern will work here. The correlation matrix and
+## covariance matrix generated from this pattern must be positive definite.
+## If you change this pattern, you may get an error when you try to generate
+## data with a non-zero association parameter.
+##
+Rho <- matrix(nrow = 9, ncol = , byrow = TRUE, 
+              data = c(1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1
+                       ))
+## vector of standard deviations for covariates
+##
+sigma <- rep(1, 9)
+
+## construct a covariance matrix from the pattern, standard deviations, and
+## one parameter in [-1,1] that governs the magnitude of non-zero correlation
+## coefficients
+##
+## Rho - the pattern of associations
+## sigma - the vector of standard deviations
+## rho - the association parameter
+##
+construct_Sigma <- function(Rho, sigma, rho) {
+  ## get the correlation matris
+  ##
+  Rho <- Rho*rho
+  for (i in 1:ncol(Rho)) {
+    Rho[i,i] <- 1.0
+  }
+  ## notice the use of matrix multiplication
+  ##
+  Sigma <- diag(sigma) %*% Rho %*% diag(sigma)
+  return(Sigma)
+}
+```
+
+## Generating the data
+
+OK, with those preliminaries out of the way. Let's generate data under our three scenarios:
+
+* no association: `ind` (`rho = 0`)
+* weak association: `wk` (`rho = 0.2`)
+* strong association: `str` (`rho = 0.8`)
+
+We'll use the same residual standard deviation, `resid = 0.2`, for all of them. `cov_` refers to the covariates. `y_` is the corresponding response
+```{r}
+## set the random number seed manually so that every run of the code will 
+## produce the same numbers
+##
+set.seed(1234)
+
+n_samp <- 100
+cov_ind <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.0))
+cov_wk <- rmvnorm(n_samp,
+                  mean = rep(0, nrow(Rho)),
+                  sigma = construct_Sigma(Rho, sigma, 0.2))
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+
+resid <- rep(0.2, n_samp)
+y_ind <- rnorm(nrow(cov_ind), mean = beta0 + cov_ind %*% beta, sd = resid)
+y_wk <- rnorm(nrow(cov_wk), mean = beta0 + cov_wk %*% beta, sd = resid)
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+```
+Now I'll collect the data into a `data frame` so that we can look at the covariates and explore how they relate to the response variable. 
+```{r}
+dat_ind <- data.frame(y_ind, cov_ind, rep("Independent", length(y_ind)))
+dat_wk <- data.frame(y_wk, cov_wk, rep("Weak", length(y_wk)))
+dat_str <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat_ind) <- column_names
+colnames(dat_wk) <- column_names
+colnames(dat_str) <- column_names
+
+dat <- rbind(dat_ind, dat_wk, dat_str)
+```
+
+## Covariate associations
+
+First, let's just look at the association of the covariates under the three scenarios.
+```{r}
+p <- PairPlot(dat_ind,
+              meas_vars = column_names[grep("x", column_names)],
+              title = "Independent")
+print(p)
+p <- PairPlot(dat_wk,
+              meas_vars = column_names[grep("x", column_names)],
+              title = "Weak association")
+print(p)
+p <- PairPlot(dat_str,
+              meas_vars = column_names[grep("x", column_names)],
+              title = "Strong association")
+print(p)
+```
+When you compare the plot for independent samples with the one for weak associations, you may not see much of a difference, but `corrplot` shows that the differences are there.
+```{r}
+corrplot(cor(dat_ind[,grepl("x", column_names)]))
+corrplot(cor(dat_wk[,grepl("x", column_names)]))
+corrplot(cor(dat_str[,grepl("x", column_names)]))
+```
+## Exploring bivariate associations between covariates and the response
+
+Now that we've seen how the covariats are related, let's examine pairwise associations between each of the covariates and the response variable. We first have to change `dat` from a "wide" format to a "long" format. [^1] Then we can use `ggplot` to produce a color-coded scatterplot with a regression line in which the colors correspond to the scenarios.
+```{r}
+for.plot <- melt(dat,
+                 id.vars = c("Scenario", "y"))
+
+p <- ggplot(for.plot, aes(x = value, y = y, color = Scenario, fill = Scenario), group = Scenario) +
+  geom_point(alpha = 0.3) +
+  stat_smooth(method = lm) +
+  xlab("x") +
+  facet_wrap(~ variable)
+print(p)
+```
+Remember that when we simulated these data, we set the coefficient on `x1` to 1, the coefficient on `x2` to 2, and the coefficient on `x3` to 1, so the top row of figures looks OK. With either independent covariates or weak associations, there doesn't seem to be a pairwise association between `x4-x9` and `y`, but what's going on with strong associations and `x4-x9`? Look back at the `corrplot` for strong associations. You'll see that `x4`, `x6`, and `x8` are strongly associated with `x2` and that `x5`, `x7`, and `x9` are strongly associated with `x1` and `x3`. The association between `x5` and `y`, for example, arises because `x5` is strongly associated with `x1` and `x3`, not because there's a direct association between `x5` and `y`. 
+
+We can check our visual impression that there are "spurious" associations in the strong association scenario by running a simple linear regression for each of the pairwise relationships. [^2] 
+```{r}
+covariate <- character(length(beta))
+est <- numeric(length(beta))
+lo <- numeric(length(beta))
+hi <- numeric(length(beta))
+for (i in 1:length(beta)) {
+  variable_name <- paste("x", i, sep="")
+  tmp_lm <- lm(y ~ value, data = subset(for.plot, Scenario == "Strong" & variable == variable_name))
+  covariate[i] <- variable_name
+  est[i] <- coef(tmp_lm)[2]
+  tmp_interval <- confint(tmp_lm)
+  lo[i] <- tmp_interval[2,1]
+  hi[i] <- tmp_interval[2,2]
+}
+results <- tibble(covariate = covariate, 
+                  estimate = round(est, 3),
+                  lo = round(lo, 3),
+                  hi = round(hi, 3))  
+
+print(results)
+```
+As you can see, the confidence interval does not include 0 for any of the covariates. 
+
+## Multiple regression
+
+Let's compare that to what we get from a multiple regression of y on all of the covariates.
+```{r}
+covariates <- paste("x", seq(1, length(beta)), sep = "")
+summary(lm(as.formula(paste("y ~ ", paste(covariates, collapse = " + "))), data = subset(dat, Scenario == "Strong")))
+```
+Here you can see that the data provide very strong evidence for an association between `x1`, `x2`, `x3` and `y`. The magnitudes of the estimated coefficients for `x1`-`x3` are close to 1, and the corresponding standard errors are no more than 0.044. In contrast, there is very little evidence for an association between any of the remaining covariates and `y`. For all of them the magnitude of the estimated association is smaller than its standard error.
+
+## Conclusion
+
+We can distinguish between two types of associations, direct associations and indirect association. [^3] An indirect association arises when a covariate, for example `x9`, is associated with a response only because it is associated with one or more other covariates that do have a direct association with the response, in this example `x1` and `x3`. If we look only at `x9` and `y`, we'll find an association. When we include `x1`-`x9` in a multiple regression, `x9` now has only a negligible association. A multivariate regression _may_ allow us to distinguish "real" from "spurious" associations. [^4]
+
+## Points left as an exercise
+
+I've illustrated the phenomena here with only one simulated data set under each scenario. A rigorous analysis would require a lot of fairly complicated math, which you're welcome to look up in a book on multiple regression. If you don't want to do that, you might want to set up a small simulation study in which you produce a hundred or a thousand data sets under conditions similar to those above to make sure the pattern seen in this one example is reproducible across a large number of examples. And as long as you're doing that, you might also want to generate data sets of different sizes to explore how these results depend on sample size relative to the number of predictors.
+
+[^1]: If you're not familiar with the difference between "wide" and "long" format, Google will return a variety of links, but Hadley Wickham's [tidy data paper](https://vita.had.co.nz/papers/tidy-data.pdf) is the definitive source.
+[^2]: The reason for the scare quotes around "spurious" will become apparent in a later post.
+[^3]: I'm not going to define "direct" or "indirect." I'll deal with the distinction when I get to discussing "spurious" correlations in a later post.
+[^4]: You can probably guess by now that I'll be returning to this later.
