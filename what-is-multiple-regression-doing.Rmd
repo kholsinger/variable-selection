@@ -1,0 +1,190 @@
+---
+title: "What is multiple regression doing?"
+output: html_notebook
+---
+
+If you came to this page directly, please take a moment to look at [this blog post]( http://darwin.eeb.uconn.edu/uncommon-ground/blog/2019/08/14/what-is-multiple-regression-doing/) for the comment. I'll wait until you're back.
+
+OK. Now you've read the blogpost, and you know why we're here. I'm going to illustrate how it is that multiple regression separates the effects that are "really there" from those that are only there because of statistical associations. We'll use exactly the same data aw we did last time, but we'll only analyse the strong association scenario.{^1] Everything in this block of R code is just setting up the data set.
+
+```{r setup, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(reshape2)
+library(corrplot)
+library(ggplot2)
+library(cowplot)
+library(WVPlots)
+library(mvtnorm)
+```
+```{r}
+## I always like to clean out my workspace before running a script to make sure
+## that I'm starting R in the same state. This helps to ensure that I can 
+## reproduce my results later
+rm(list = ls())
+
+## intetcept
+##
+beta0 <- 1.0
+## regression coefficients
+##
+beta <- c(1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+## pattern of correlation matrix, all non-zero entries are set to saem
+## correlation, covariance matrix caldulated from individual variances and a 
+## single association parameter governing the non-zero correlation coefficients
+##
+## Note: Not just any pattern will work here. The correlation matrix and
+## covariance matrix generated from this pattern must be positive definite.
+## If you change this pattern, you may get an error when you try to generate
+## data with a non-zero association parameter.
+##
+Rho <- matrix(nrow = 9, ncol = , byrow = TRUE, 
+              data = c(1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1
+                       ))
+## vector of standard deviations for covariates
+##
+sigma <- rep(1, 9)
+
+## construct a covariance matrix from the pattern, standard deviations, and
+## one parameter in [-1,1] that governs the magnitude of non-zero correlation
+## coefficients
+##
+## Rho - the pattern of associations
+## sigma - the vector of standard deviations
+## rho - the association parameter
+##
+construct_Sigma <- function(Rho, sigma, rho) {
+  ## get the correlation matris
+  ##
+  Rho <- Rho*rho
+  for (i in 1:ncol(Rho)) {
+    Rho[i,i] <- 1.0
+  }
+  ## notice the use of matrix multiplication
+  ##
+  Sigma <- diag(sigma) %*% Rho %*% diag(sigma)
+  return(Sigma)
+}
+
+
+## set the random number seed manually so that every run of the code will 
+## produce the same numbers
+##
+set.seed(1234)
+
+n_samp <- 100
+cov_ind <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.0))
+cov_wk <- rmvnorm(n_samp,
+                  mean = rep(0, nrow(Rho)),
+                  sigma = construct_Sigma(Rho, sigma, 0.2))
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+
+resid <- rep(0.2, n_samp)
+y_ind <- rnorm(nrow(cov_ind), mean = beta0 + cov_ind %*% beta, sd = resid)
+y_wk <- rnorm(nrow(cov_wk), mean = beta0 + cov_wk %*% beta, sd = resid)
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+
+dat_str <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat_str) <- column_names
+```
+First, let's double check the multiple regression analysis to make sure that the data we're using really are the same.
+```{r}
+covariates <- paste("x", seq(1, length(beta)), sep = "")
+summary(lm(as.formula(paste("y ~ ", paste(covariates, collapse = " + "))), data = dat_str))
+```
+If you compare those results with the ones we obtained before,[^2] you'll see that they're identical to 6 decimal places. That makes it pretty likely that they're the same data sets.
+
+We'll focus this example on `x1`, `x3`, and `x9`, where we know that the "real" associations are between `x1`, `x3`, and `y` and that the "apparent" association between `x9` and `y` arises only because `x9` is strongly associated with `x1` and `x3`. Let's start by looking at the bivariate association between `x1` and `y`, including a plot of the residuals.
+```{r}
+lm_str <- lm(y ~ x1, data = dat_str)
+residual <- residuals(lm_str)
+for.plot <- data.frame(x = dat_str$x1, y = residual)
+p <- ggplot(for.plot, aes(x = x, y = y)) +
+  geom_point(fill = "tomato", color = "tomato") +
+  geom_hline(yintercept = 0.0) +
+  xlab("Observed (x1)") +
+  ylab("Residual")
+print(p)
+```
+As you can see, the residuals seem pretty randomly distributed, which is what we hope to see when we do a residual plot. But let's try this. Let's try regressing the residuals on `x3`. Think of this as looking at the influence of `x3` on `y` once we've removed the influence of `x1`.
+```{r}
+res_x3 <- lm(residual ~ x3, data = dat_str)
+print(summary(res_x3))
+```
+Look at that. We have good evidence that the residuals from regressing `y` on `x1` show a relationship with `x3` - the larger `x3`, the larger the residual. We can see this both by coloring the residuals above and by plotting the residuals against `x3`.
+```{r}
+for.plot <- data.frame(x = dat_str$x1, y = residual, x3 = dat_str$x3)
+p <- ggplot(for.plot, aes(x = x, y = y, fill = x3, color = x3)) +
+  geom_point() +
+  scale_fill_gradient2() +
+  scale_color_gradient2() +
+  geom_hline(yintercept = 0.0) +
+  xlab("Observed (x1)") +
+  ylab("Residual")
+print(p)
+p <- ggplot(for.plot, aes(x = x3, y = residual)) +
+  geom_point(color = "tomato", fill = "tomato") +
+  geom_smooth(method = "lm") +
+  xlab("Observed (x3)") +
+  ylab("Residual (from x1)")
+print(p)
+```
+Now let's see what happens if we do the same thing with `x9`.
+```{r}
+res_x9 <- lm(residual ~ x9, data = dat_str)
+print(summary(res_x9))
+
+for.plot <- data.frame(x = dat_str$x1, y = residual, x9 = dat_str$x9)
+p <- ggplot(for.plot, aes(x = x, y = y, fill = x9, color = x9)) +
+  geom_point() +
+  scale_fill_gradient2() +
+  scale_color_gradient2() +
+  geom_hline(yintercept = 0.0) +
+  xlab("Observed (x1)") +
+  ylab("Residual")
+print(p)
+p <- ggplot(for.plot, aes(x = x9, y = residual)) +
+  geom_point(color = "tomato", fill = "tomato") +
+  geom_smooth(method = "lm") +
+  xlab("Observed (x9)") +
+  ylab("Residual (from x1)")
+print(p)
+```
+Here we see that there is a weak positive association between `x9` and `y`, but it isn't convincing. Once we've removed the influence of `x1` the remaining association between `x9` and `y` presumably arises because `x3` and `x9` are associated. Let's try this again after removing the influence of _*both*_ `x1` and `x3`.
+```{r}
+lm_x1_x3 <- lm(residual ~ x1 +x3, data = dat_str)
+print(summary(lm_x1_x3))
+
+residual <- residuals(lm_x1_x3)
+
+res_x9 <- lm(residual ~ x9, data = dat_str)
+print(summary(res_x9))
+
+for.plot <- data.frame(x = dat_str$x1, y = residual, x9 = dat_str$x9)
+p <- ggplot(for.plot, aes(x = x9, y = residual)) +
+  geom_point(color = "tomato", fill = "tomato") +
+  geom_smooth(method = "lm") +
+  xlab("Observed (x9)") +
+  ylab("Residual (from x1)")
+print(p)
+```
+Notice that the coefficient on `x9` is now only about 0.09 rather than 0.16. There's still a bit of an association, but it's weak and poorly supported. 
+
+So that's what `lm()` is doing. It is "statistically controlling" for the effects of other covariates when estimating the effect of each one individually. It doesn't fit the regression sequentially, as I've done it here. It fits all of the coefficients simultaneously. As a result, it doesn't make any difference what order you put variables into the model statement. You'll get the same result.[^3]
+
+[^1]: To make sure that the data are the same, we have to generate all three data sets.
+[^2]: Scroll all the way to the bottom of the page, just before the Conclusion at [http://darwin.eeb.uconn.edu/pages/variable-selection/multiple-regression-basics.nb.html](http://darwin.eeb.uconn.edu/pages/variable-selection/multiple-regression-basics.nb.html).
+[^3]: If you don't believe me, try manually changing the order of the variables in this multiple regression and see what you get.
