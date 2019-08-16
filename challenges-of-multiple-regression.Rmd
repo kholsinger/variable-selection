@@ -1,0 +1,141 @@
+---
+title: "Challenges of multiple regression (or why we might want to select variables)"
+output: html_notebook
+---
+
+If you've read the two previous installments in this series, you may wonder why I didn't stop with the last one. What else is there to worry about? We saw that multiple regression may allow us to identify "real" associations and distinguish them from "spurious" ones. What more could we want? Well, to answer this question. Let's start with another experiment.
+
+First, I'm going to modify the code I ran before to introduce a little more random error. Specifically, we have $R^2 > 0.99$. I'll increase `resid` from 0.2 to 2.0 so that the resulting $R^2$ is only about 0.4.
+
+```{r setup, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(cowplot)
+library(mvtnorm)
+```
+```{r}
+## intetcept
+##
+beta0 <- 1.0
+## regression coefficients
+##
+beta <- c(1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+## pattern of correlation matrix, all non-zero entries are set to saem
+## correlation, covariance matrix caldulated from individual variances and a 
+## single association parameter governing the non-zero correlation coefficients
+##
+## Note: Not just any pattern will work here. The correlation matrix and
+## covariance matrix generated from this pattern must be positive definite.
+## If you change this pattern, you may get an error when you try to generate
+## data with a non-zero association parameter.
+##
+Rho <- matrix(nrow = 9, ncol = , byrow = TRUE, 
+              data = c(1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1
+                       ))
+## vector of standard deviations for covariates
+##
+sigma <- rep(1, 9)
+
+## construct a covariance matrix from the pattern, standard deviations, and
+## one parameter in [-1,1] that governs the magnitude of non-zero correlation
+## coefficients
+##
+## Rho - the pattern of associations
+## sigma - the vector of standard deviations
+## rho - the association parameter
+##
+construct_Sigma <- function(Rho, sigma, rho) {
+  ## get the correlation matris
+  ##
+  Rho <- Rho*rho
+  for (i in 1:ncol(Rho)) {
+    Rho[i,i] <- 1.0
+  }
+  ## notice the use of matrix multiplication
+  ##
+  Sigma <- diag(sigma) %*% Rho %*% diag(sigma)
+  return(Sigma)
+}
+
+## set the random number seed manually so that every run of the code will 
+## produce the same numbers
+##
+set.seed(1234)
+
+n_samp <- 100
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+
+resid <- rep(2.0, n_samp)
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+
+dat <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat) <- column_names
+
+covariates <- paste("x", seq(1, length(beta)), sep = "")
+lm_for_pred_1 <- lm(as.formula(paste("y ~ ", paste(covariates, collapse = " + "))), data = dat) 
+summary(lm_for_pred_1)
+```
+Notice that now `x2` appears not to be associated with `y` and that the evidence for an association between `x1` and `y` is much weaker than it was before. If we restrict the model to the covariates we know have an association (because we know the model that generated the data), here's what we get:
+```{r}
+lm_data_set_1 <- lm(y ~ x1 + x2 + x3, data = dat)
+summary(lm_data_set_1)
+```
+So, if we restrict the covariates to the ones we know are "right" we now have pretty good evidence that all three are associated, although the magnitude of the association between `x2` and `y` is stiller smaller than in "ought" to be. That's one reason why we might want to restrict the number of covariates. _*If we include "too many" covariates, the extra uncertainty associated with each individual association may cause us to miss "real" associations that are there*_.
+
+Here's another one: Let's generate a new data set using the same parameters. Since the errors are random, this data set will differ from the one we had before. We'll run both linear regressions and compare the results.
+```{r}
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+
+resid <- rep(2.0, n_samp)
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+
+dat <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat) <- column_names
+
+covariates <- paste("x", seq(1, length(beta)), sep = "")
+lm_for_pred_2 <- lm(as.formula(paste("y ~ ", paste(covariates, collapse = " + "))), data = dat) 
+summary(lm_for_pred_2)
+
+lm_data_set_2 <- lm(y ~ x1 + x2 + x3, data = dat)
+summary(lm_data_set_2)
+```
+Now we have a situation where in the full analysis there appears to be an association between `x6` and `y` and where in the reduced analysis the evidence for an association between `s1` and `y` is really marginal. Furthermore, evidence for the associations between `x1`, `x2`, and `y` are marginal.[^1] At least when we restrict our analysis to the case where we're examining only "real" associations, we're not too wrong. 
+
+In addition to analysis of the second data set getting things "wrong", remember that the only difference between the first data set and the second is that the random error is different in the two cases. Neither the identity nor the magnitude of the "real" relationships has changed. That's a problem not only if you hope to interpret observed associations as causal relationships,[^2] but also if you want to extrapolate relationships beyond the domain of your regression.
+
+Let's consider one new data point, and compare the predictions of these two models with the true answer:
+```{r}
+new_data <- data.frame(x1 = 4.0, x2 = 4.0, x3 = 4.0,
+                       x4 = 4.0, x5 = 4.0, x6 = 4.0,
+                       x7 = 4.0, x8 = 4.0, x9 = 4.0)
+pred_from_1 <- predict.lm(lm_for_pred_1, new_data)
+pred_from_2 <- predict.lm(lm_for_pred_2, new_data)
+
+cat("Prediction from data set 1: ", pred_from_1, "\n",
+    "Prediction from data set 2: ", pred_from_2, "\n",
+    "True answer:                ", beta0 + as.matrix(new_data) %*% beta, "\n", sep = "")
+```
+Remember that the residual standard deviation we specified was 2.0. That means that the two predictions are two standard deviations apart from one another, and each is about half a standard deviation from the true value. Given that we're extrapolating well beyond the observed range of any of the covariates, `x2` has the largest value (2.9) among any of them, that doesn't seem awful, but with a larger number of covariates, more of which had real associations, the predictions could be substantially more unstable than these.
+
+In any case, I think these simple exampls show that there are some good reasons that we may want to reduce the number of covariates in a regression. The question is how, and for the answer to that, I'm afraid you'll have to come back another time.
+
+[^1]: Lest you think that I cooked this example somehow. I guarantee you that I didn't know it was going to work out this way until I ran the code. The results of the second simulation made my point even better than I imagined it would.
+
+[^2]: See my other blog series on (causal inference in ecology)[http://darwin.eeb.uconn.edu/uncommon-ground/causal-inference-in-ecology/] for some of the challenges facing causal inference in an observational context in ecology.
