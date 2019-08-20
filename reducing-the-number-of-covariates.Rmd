@@ -1,0 +1,182 @@
+---
+title: "Reducing the number of covariates - a couple of \"simple\" strategies"
+output: html_notebook
+---
+
+In the R notebook illustrating [challenges of multiple regression](http://darwin.eeb.uconn.edu/pages/variable-selection/challenges-of-multiple-regression.nb.html) I illustrated why we might want to reduce the number of covariates in our regression. In this notebook I'm going to illustrate a couple of different approaches:
+
+1. Retaining only the covariates that have a "real" relationship with the response variable.
+2. Selecting covariates from (relatively) uncorrelated clusters of covariates
+
+## Retaining covariates with a "real" relationship
+
+In the example we've been playing with so far, we know that only `x1`, `x2`, and `x3` have a "real" relationship with `y`, because the process we used to generate the data has 0s for the coefficient relating `x4`-`x9` to `y`. Let's regenerate the data from our last example, with $R^2 \approx 0.4$, restrict our analysis to only `x1`, `x2`, and `x3` and see if we encounter the instability in parameter estimates and predictions we saw last time. 
+```{r setup, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(cowplot)
+library(mvtnorm)
+library(corrplot)
+```
+
+```{r}
+## intetcept
+##
+beta0 <- 1.0
+## regression coefficients
+##
+beta <- c(1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+## pattern of correlation matrix, all non-zero entries are set to saem
+## correlation, covariance matrix caldulated from individual variances and a 
+## single association parameter governing the non-zero correlation coefficients
+##
+## Note: Not just any pattern will work here. The correlation matrix and
+## covariance matrix generated from this pattern must be positive definite.
+## If you change this pattern, you may get an error when you try to generate
+## data with a non-zero association parameter.
+##
+Rho <- matrix(nrow = 9, ncol = , byrow = TRUE, 
+              data = c(1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1
+                       ))
+## vector of standard deviations for covariates
+##
+sigma <- rep(1, 9)
+
+## construct a covariance matrix from the pattern, standard deviations, and
+## one parameter in [-1,1] that governs the magnitude of non-zero correlation
+## coefficients
+##
+## Rho - the pattern of associations
+## sigma - the vector of standard deviations
+## rho - the association parameter
+##
+construct_Sigma <- function(Rho, sigma, rho) {
+  ## get the correlation matris
+  ##
+  Rho <- Rho*rho
+  for (i in 1:ncol(Rho)) {
+    Rho[i,i] <- 1.0
+  }
+  ## notice the use of matrix multiplication
+  ##
+  Sigma <- diag(sigma) %*% Rho %*% diag(sigma)
+  return(Sigma)
+}
+
+## set the random number seed manually so that every run of the code will 
+## produce the same numbers
+##
+set.seed(1234)
+
+n_samp <- 100
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+
+resid <- rep(2.0, n_samp)
+
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_1 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_2 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat_1) <- column_names
+colnames(dat_2) <- column_names
+```
+
+Now that the data are generated, let's run the analyses
+```{r}
+lm_for_pred_1 <- lm(y ~ x1 + x2 + x3, data = dat_1)
+lm_for_pred_2 <- lm(y ~ x1 + x2 + x3, data = dat_2)
+summary(lm_for_pred_1)
+summary(lm_for_pred_2)
+```
+Well, the first thing we discover is that the parameter estimates are as stable as we might hope. They're all in the right direction - `x1` and `x3` have positive coefficients, `x2` has a negative coefficient -, but the magnitude of `x2` is a long way off in the first data set and the magnitude of `x1` is a long way off in the second data set. If we compare predictions, here's what we get:
+```{r}
+new_data <- data.frame(x1 = 4.0, x2 = 4.0, x3 = 4.0,
+                       x4 = 4.0, x5 = 4.0, x6 = 4.0,
+                       x7 = 4.0, x8 = 4.0, x9 = 4.0)
+pred_from_1 <- predict.lm(lm_for_pred_1, new_data)
+pred_from_2 <- predict.lm(lm_for_pred_2, new_data)
+
+cat("Prediction from data set 1: ", pred_from_1, "\n",
+    "Prediction from data set 2: ", pred_from_2, "\n",
+    "True answer:                ", beta0 + as.matrix(new_data) %*% beta, "\n", sep = "")
+```
+That doesn't look very good either. This isn't good news, because we know that `x1`, `x2`, and `x3` have an association with `y` and even though we excluded irrelevant covariates our parameter estimates aren't very stable and our predictions can be pretty variable. Let's try another approach.
+
+## Selecting (relatively) uncorrelated covariates
+
+One thing we could observe from the data even if we didn't know how it was constructed is how the covariates are associated with one another. Let's visualize those associations using `corrplot()` on each of the data sets.
+```{r}
+corrplot(cor(dat_1[,2:10]), order = "hclust", title = "Data set 1")
+corrplot(cor(dat_2[,2:10]), order = "hclust", title = "Data set 2")
+```
+Not surprisingly, both data sets show pretty clearly that there are two sets of coefficients within which there is a high correlation and between which there's very little correlation at all.[^1] Let's see what happens if we take one covariate from the first cluster and one from the second cluster, say `x2` and `x1`. You should get similar results regardless of which covariate you pick from each cluster, but I'll let you check that out on your own.
+```{r}
+lm_for_pred_1 <- lm(y ~ x1 + x2, data = dat_1)
+lm_for_pred_2 <- lm(y ~ x1 + x2, data = dat_2)
+summary(lm_for_pred_1)
+summary(lm_for_pred_2)
+
+new_data <- data.frame(x1 = 4.0, x2 = 4.0, x3 = 4.0,
+                       x4 = 4.0, x5 = 4.0, x6 = 4.0,
+                       x7 = 4.0, x8 = 4.0, x9 = 4.0)
+pred_from_1 <- predict.lm(lm_for_pred_1, new_data)
+pred_from_2 <- predict.lm(lm_for_pred_2, new_data)
+
+cat("Prediction from data set 1: ", pred_from_1, "\n",
+    "Prediction from data set 2: ", pred_from_2, "\n",
+    "True answer:                ", beta0 + as.matrix(new_data) %*% beta, "\n", sep = "")
+```
+That's a bit better, but not a lot. Just for the record, a Bayesian version of the analysis gives similar results.
+```{r}
+library(rstanarm)
+
+options(mc.cores = parallel::detectCores())
+
+stan_lm_for_pred_1 <- stan_glm(y ~ x1 + x2, data = dat_1, family = gaussian(), refresh = 0)
+stan_lm_for_pred_2 <- stan_glm(y ~ x1 + x2, data = dat_2, family = gaussian(), refresh = 0)
+summary(stan_lm_for_pred_1, digits = 3)
+summary(stan_lm_for_pred_2, digits = 3)
+```
+
+## Conclusion
+
+What have we learned so far? Here's my quick summary:
+
+* [Multiple regression is useful](http://darwin.eeb.uconn.edu/uncommon-ground/blog/2019/08/12/collecting-my-thoughts-about-variable-selection-in-multiple-regression/). It _*may*_ under the appropriate circumstances allow us to distinguish "real" from "spurious" associations.
+
+* [There are some significant challenges](http://darwin.eeb.uconn.edu/uncommon-ground/blog/2019/08/19/challenges-of-multiple-regression-or-why-we-might-want-to-select-variables/) to using multiple regression. Specifically, if you include all of the covariates you've measured and they are highly correlated
+
+** Your estimates of association are likely to be unstable.[^2]
+
+** As a result, predictions you make from your regression that extrapolate beyond the bounds of the data you fit are also likely to be unstable.
+
+* Even if you know ahead of time which covariates are important,[^3] your estimates of the magnitude of any association are likely to be very imprecise.
+
+* And if you restrict you covariates to those that are roughly independent, you aren't much better off.[^4]
+
+So what are we to do? Well, there are some other alternatives to reducing the number of covariates that we'll explore in notebooks yet to come.
+
+[^1]: I say "not surprisingly", of course, because we specifically constructed the correlation matrix this way.
+
+[^2]: In the sense that if you simulate new data under the same conditions your estimates of regression coefficients are likely to be quite different.
+
+[^3]: If you knew which ones were important ahead of time, why did you bother measuring all the rest?
+
+[^4]: To be fair, part of the problem here comes from looking only at the point estimates. Look at the results from `rstanarm()` again. You'll see that the credible intervals for `x1` and `x2` as estimated from data set 1 overlap broadly with those estimated from data set 2. The estimates aren't as different from one another as they initially appear. Neither are the posterior predictions. (Verifying that is left as an exercise for those who are interested.)
