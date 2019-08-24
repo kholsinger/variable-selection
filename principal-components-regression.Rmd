@@ -1,0 +1,228 @@
+---
+title: "Principal components regression"
+output: html_notebook
+---
+
+If you've studied multiple regression before, you've probably heard the term "collinearity". Collinearity means that two or more covariates are providing essentially the same information about the response variable. When covariates are highly collinear, "regression estimates are unstable and have high standard errors."[^1] The Variance Inflation Factor (VIF) is commonly used to assess how much of a problem we have with collinearity. A VIF greater than 4 means that we should look carefully at our covariates (without telling what we should do once we've looked at them). A VIF greater than 10 means we have serious problems that we should fix (again without giving us any advice about how to fix them). Let's take a look at the VIF estimates for the sample data we've been using and see what we find. 
+
+## Regenerating the data
+
+First we have to regenerate the data.
+```{r setup, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(cowplot)
+library(mvtnorm)
+library(corrplot)
+
+rm(list = ls())
+```
+
+```{r}
+## intetcept
+##
+beta0 <- 1.0
+## regression coefficients
+##
+beta <- c(1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+## pattern of correlation matrix, all non-zero entries are set to saem
+## correlation, covariance matrix caldulated from individual variances and a 
+## single association parameter governing the non-zero correlation coefficients
+##
+## Note: Not just any pattern will work here. The correlation matrix and
+## covariance matrix generated from this pattern must be positive definite.
+## If you change this pattern, you may get an error when you try to generate
+## data with a non-zero association parameter.
+##
+Rho <- matrix(nrow = 9, ncol = , byrow = TRUE, 
+              data = c(1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1
+                       ))
+## vector of standard deviations for covariates
+##
+sigma <- rep(1, 9)
+
+## construct a covariance matrix from the pattern, standard deviations, and
+## one parameter in [-1,1] that governs the magnitude of non-zero correlation
+## coefficients
+##
+## Rho - the pattern of associations
+## sigma - the vector of standard deviations
+## rho - the association parameter
+##
+construct_Sigma <- function(Rho, sigma, rho) {
+  ## get the correlation matris
+  ##
+  Rho <- Rho*rho
+  for (i in 1:ncol(Rho)) {
+    Rho[i,i] <- 1.0
+  }
+  ## notice the use of matrix multiplication
+  ##
+  Sigma <- diag(sigma) %*% Rho %*% diag(sigma)
+  return(Sigma)
+}
+
+## set the random number seed manually so that every run of the code will 
+## produce the same numbers
+##
+set.seed(1234)
+
+n_samp <- 100
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+
+resid <- rep(2.0, n_samp)
+
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_1 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_2 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat_1) <- column_names
+colnames(dat_2) <- column_names
+```
+
+## Examining VIF estimates
+
+Now that we have the data, we'll use `vif()` from the `car` package to look at the VIFs from analysis of each of the two data sets.
+
+```{r}
+library(car)
+
+lm_for_pred_1 <- lm(y ~ x1 + x2 + x3, data = dat_1)
+lm_for_pred_2 <- lm(y ~ x1 + x2 + x3, data = dat_2)
+cat("From data set 1\n")
+vif(lm_for_pred_1)
+cat("\nFrom data set 2\n")
+vif(lm_for_pred_2)
+```
+
+The VIF coefficients reported in each case don't look too bad. The worst of them, `x3`, is less than 2.3, so we wouldn't normally think that collinearity is a problem. If we do the same analysis when we include only `x1` and `x2` in our analysis there's even less indication of a problem, as you can see.
+
+```{r}
+lm_for_pred_1 <- lm(y ~ x1 + x2, data = dat_1)
+lm_for_pred_2 <- lm(y ~ x1 + x2, data = dat_2)
+cat("From data set 1\n")
+vif(lm_for_pred_1)
+cat("\nFrom data set 2\n")
+vif(lm_for_pred_2)
+```
+
+In one sense, I should probably stop here. If you were paying attention to footnotes in the last notebook, you will have noticed that [footnote 4](http://darwin.eeb.uconn.edu/pages/variable-selection/reducing-the-number-of-covariates.nb.html#fn4) said this:
+
+> To be fair, part of the problem here comes from looking only at the point estimates. Look at the results from rstanarm() again. You’ll see that the credible intervals for x1 and x2 as estimated from data set 1 overlap broadly with those estimated from data set 2. The estimates aren’t as different from one another as they initially appear. Neither are the posterior predictions. (Verifying that is left as an exercise for those who are interested.)
+
+The problem might be that we - I - have been paying too much attention to point estimates of regreesion coefficients and to point predictions from fitted regressions rather than paying attention to uncertainty (as any proper Bayesian should). But I promised you an exploration of principal components regression in the title of this notebook, so let's try it with these data sets and see what happens.
+
+## Principal components regression
+
+As the name suggests, the first step in a principal components regression is a principal components analysis, specifically a principal components analysis of the covariates.[^2]
+
+```{r}
+pca_1 <- princomp(dat_1[, 2:10], cor = TRUE)
+pca_2 <- princomp(dat_2[, 2:10], cor = TRUE)
+
+plot(pca_1)
+plot(pca_2)
+```
+
+In both cases the screeplot suggests that the first two principal components account for essentially all of the variance. That shouldn't be too surprising, since the correlation matrix is so highly structured. Alternate rows are (approximately) equal to one another in the correlation matrix used to generate the data. It also shouldn't be too surprising that the estimated loadings on the first two principals component are fairly similar in the two data sets.
+
+```{r}
+cat("Data set 1\n")
+round(pca_1$loadings[, 1:2], 3)
+cat("\nData set 2\n")
+round(pca_2$loadings[, 1:2], 3)
+```
+
+### Regression on the principal components
+
+Since the first two principal components accounts for so much of the variance, let's regress `y` on the score associated with the first principal component.
+
+```{r}
+
+dat_1_new <- data.frame(y = dat_1$y, 
+                        x1 = pca_1$scores[, 1],
+                        x2 = pca_1$scores[, 2])
+dat_2_new <- data.frame(y = dat_2$y, 
+                        x1 = pca_2$scores[, 1],
+                        x2 = pca_2$scores[, 2])
+
+cat("Data set 1\n")
+lm_for_pred_1 <- lm(y ~ x1 + x2, data = dat_1_new)
+summary(lm_for_pred_1)
+cat("\nData set 2\n")
+lm_for_pred_2 <- lm(y ~ x1 + x2, data = dat_2_new)
+summary(lm_for_pred_2)
+```
+
+Although the point estimates aren't exactly equal (you shouldn't expect them to be), they're reasonably close. Moreover, if we run a Bayesian version of the analysis, the credible intervals overlap very broady.
+
+```{r}
+library(rstanarm)
+
+options(mc.cores = parallel::detectCores())
+
+stan_lm_for_pred_1 <- stan_glm(y ~ x1 + x2, data = dat_1_new, family = gaussian(), refresh = 0)
+stan_lm_for_pred_2 <- stan_glm(y ~ x1 + x2, data = dat_2_new, family = gaussian(), refresh = 0)
+summary(stan_lm_for_pred_1, digits = 3)
+summary(stan_lm_for_pred_2, digits = 3)
+```
+
+### Prediction from principal components
+
+Predicting `y` from new data is a bit more complicated than in the past. We have to calculate scores on the first two principal components from the new data and feed those scores to `predict()`.
+
+```{r}
+new_data <- data.frame(x1 = 4.0, x2 = 4.0, x3 = 4.0,
+                       x4 = 4.0, x5 = 4.0, x6 = 4.0,
+                       x7 = 4.0, x8 = 4.0, x9 = 4.0)
+
+pred_1 <- as.matrix(new_data) %*% pca_1$loadings[, 1:2]
+pred_2 <- as.matrix(new_data) %*% pca_2$loadings[, 1:2]
+
+dat_pred_1 <- data.frame(x1 = pred_1[1],
+                         x2 = pred_1[2])
+dat_pred_2 <- data.frame(x1 = pred_2[1],
+                         x2 = pred_2[2])
+
+pred_from_1 <- predict.lm(lm_for_pred_1, dat_pred_1)
+pred_from_2 <- predict.lm(lm_for_pred_2, dat_pred_2)
+
+cat("Prediction from data set 1: ", pred_from_1, "\n",
+    "Prediction from data set 2: ", pred_from_2, "\n",
+    "True answer:                ", beta0 + as.matrix(new_data) %*% beta, "\n", sep = "")
+```
+
+Unfortunately, our predictions are about the same as they were before. Given that the estimated regression coefficients aren't _too_ different from one another, this suggests that the challenges of prediction may have more to do with extrapolating beyond the bounds of the observed data than with uncertainty about regression coefficients. And remember, the underlying process generating these data is linear. Imagine how bad our extrapolations could be if the underlying process were non-linear, was well approximated by a linear regression in the observed range of the data, and our extrapolation goes beyond the observed data.
+
+## Conclusions
+
+Principal components regression does seem to stabilize estimates of regression coefficients a bit, particularly when you realize the amount of uncertainty associated with those estimates. When you take uncertainty into account, you really don't have any evidence that the estimates you're getting are different. That's good news.
+
+The bad news is that our predictions don't seem to be any more stable.[^3] Actually, that's not all of the bad news. The other bad news is that interpreting a principal components regression is less straightforward than interpreting a regression directly on the covariates. Granted, the principal components are (by definition) statistically unrelated to one another, but we're now faced with interpreting what they mean. In this case we can say that the first principal component reflects (roughly) the sum of all of the covariates and that the second principal component reflects (roughly) the difference between the sum of odd and even covariates. In nearly every principal component analysis of biological data I've done, deciding how to provide a verbal interpretation of the principal components has been a challenge, not to mention that a screeplot rarely shows such a clean break between components that matter and those that don't.
+
+So are there other alternatives for reducing the number of covariates? Would I be asking this question if there weren't. We'll take a look at the LASSO in the next notebook, and in the one following that I'll force you to think Bayesian and explore hierarchical shrinkage priors, specifically the regularize horseshoe prior that's available in `rstanarm()`. That will probably be the end of the series, except that by popular request[^4] I may try to formulate a checklist that summarizes what we've learned in a concluding post.
+
+[^1]: I'm drawing heavily on [Collinearity Diagnostics, Model Fit & Variable Contribution](https://cran.r-project.org/web/packages/olsrr/vignettes/regression_diagnostics.html) for this discussion.
+
+[^2]: If you're not familiar with principal components analysis, Wikipedia has a nice overview: [https://en.wikipedia.org/wiki/Principal_component_analysis](https://en.wikipedia.org/wiki/Principal_component_analysis).
+
+[^3]: To be fair, I haven't tried to assess uncertainty in the predictions. There's a good chance that if I didn't, the predictions wouldn't look all that different. If you want to check out my intuition, you should be able to use `predict()` on the objects from the `stan_lm()` analyses with the same data frames used here to get posterior prediction intervals.
+
+[^4]: Well, I've only had one request, but it's probably worth formulating a checklist anyway, if I can come up with one that I don't feel embarassed about.
