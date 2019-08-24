@@ -14,7 +14,8 @@ space.
 -----
 
 <ol>
-<li id="fn1">I've been using editors long enough, though, that I only use the
+<li id="fn1"><p>I've been using editors long enough, though, that I only use the
     editor in RStudio when I'm editing an R notebook. Otherwise,
-    [Emacs](https://www.gnu.org/software/emacs/emacs.html) is my
-    editor of choice. 
+    Emacs (https://www.gnu.org/software/emacs/emacs.html) is my
+    editor of choice.</p></li>
+</ol> 
