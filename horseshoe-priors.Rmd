@@ -1,0 +1,239 @@
+---
+title: "A Bayesian approach to variable selection using horseshoe priors"
+output: html_notebook
+---
+
+It won't come as a surprise to anyone who knows me that I have to try a Bayesian approach to variable selection. It also turns out that there's an easy way to do it, since "horseshoe priors" are built into `rstanarm`. What's a horeshoe prior you ask? Well you can see a few of the details in the next section, or you can just skip to the section where we use it in `rstanarm` if you find the math more confusing than helpful.
+
+## What is a horsehoe prior?
+
+If you really want to know and understand horseshoe priors, you'll need to read a paper by Juho Pironen and Aki Vehtari in the _Electronic Journal of Statistics_,[^1] but here's a brief outline.
+
+The likelihood in standard linear regression model looks like this
+
+$$
+\eqalign{
+y_i &\sim& \mbox{N}(\mu_i, \sigma^2) \\
+\mu_i &=& \beta_0 + \sum_j \beta_jx_{ij}  
+}
+$$
+
+To complete the Bayesian model, we need to specify priors for $\sigma^2$ and the $\beta$s. The default choices in `rstanarm` are:[^2]
+
+$$
+\eqalign{
+\sigma &\sim& \mbox{Exp}(1) \\
+\beta_0 &\sim& \mbox{N}(0, 10) \\
+\beta_i &\sim& \mbox{N}(0, 2.5) \quad \mbox{for } i > 0
+}
+$$
+
+These are the choices we used [here](http://darwin.eeb.uconn.edu/pages/variable-selection/reducing-the-number-of-covariates.nb.html). The basic horsehoe prior affects only the last of these. Specifically,
+
+$$
+\eqalign{
+\beta_i &\sim& \mbox{N}(0, \tau^2\lambda_i^2) \\
+\lambda_i &\sim& \mbox{Cauchy}^+(0, 1) \quad ,
+}
+$$
+
+where $\mbox{Cauchy}^+$ refers to a half-Cauchy distribution on the positive real line. A Cauchy distribution has very fat tails, so the tendency for any $\beta_i$ is to be either close to zero, because $\lambda_i$ is small, or well away from zero, because $\lambda_i$ is large. $\tau$ sets the total amount of influence the covariates have on the response, rather like $\lambda$ in the [Lasso](http://darwin.eeb.uconn.edu/pages/variable-selection/using-the-lasso.nb.html).
+
+As Pironen and Vehtari explain, however, there hasn't been consensus on how to set or estimate $\tau$. They introduce a new version of the horseshoe prior, the _regularized horseshoe prior_ that looks like this
+
+$$
+\eqalign{
+\beta_i &\sim& \mbox{N}(0, \tau^2\tilde\lambda_i^2) \\
+\tilde\lambda_i &=& \frac{c^2\lambda_i^2}{c^2 + \tau^2\lambda_i^2} \\
+\lambda_i &\sim& \mbox{Cauchy}^+(0, 1) \quad .
+}
+$$
+
+Notice that if $\tau^2\lambda_i^2 \ll c^2$, meaning that $\beta_i$ is close to 0, then we have something very close to the original horseshoe prior. If on the other hand, $\tau^2\lambda_i^2 \gg c^2$ then the prior on $\beta_i$ is close to $\mbox{N}(0, c^2)$. Now we just[^3] need a prior on $c$. Read Pironen and Vehtari if you want all of the gory details. We'll just use `hs()` as a prior in our model, setting the `global_scale` parameter according to their advice.
+
+## Setting up the data
+
+Once again we have to start by generating the data.
+```{r setup, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(cowplot)
+library(mvtnorm)
+library(corrplot)
+
+rm(list = ls())
+```
+
+```{r}
+## intetcept
+##
+beta0 <- 1.0
+## regression coefficients
+##
+beta <- c(1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+## pattern of correlation matrix, all non-zero entries are set to saem
+## correlation, covariance matrix caldulated from individual variances and a 
+## single association parameter governing the non-zero correlation coefficients
+##
+## Note: Not just any pattern will work here. The correlation matrix and
+## covariance matrix generated from this pattern must be positive definite.
+## If you change this pattern, you may get an error when you try to generate
+## data with a non-zero association parameter.
+##
+Rho <- matrix(nrow = 9, ncol = , byrow = TRUE, 
+              data = c(1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1
+                       ))
+## vector of standard deviations for covariates
+##
+sigma <- rep(1, 9)
+
+## construct a covariance matrix from the pattern, standard deviations, and
+## one parameter in [-1,1] that governs the magnitude of non-zero correlation
+## coefficients
+##
+## Rho - the pattern of associations
+## sigma - the vector of standard deviations
+## rho - the association parameter
+##
+construct_Sigma <- function(Rho, sigma, rho) {
+  ## get the correlation matris
+  ##
+  Rho <- Rho*rho
+  for (i in 1:ncol(Rho)) {
+    Rho[i,i] <- 1.0
+  }
+  ## notice the use of matrix multiplication
+  ##
+  Sigma <- diag(sigma) %*% Rho %*% diag(sigma)
+  return(Sigma)
+}
+
+## set the random number seed manually so that every run of the code will 
+## produce the same numbers
+##
+set.seed(1234)
+
+n_samp <- 100
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+
+resid <- rep(2.0, n_samp)
+
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_1 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_2 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat_1) <- column_names
+colnames(dat_2) <- column_names
+
+dat_1[, 1:10] <- lapply(dat_1[, 1:10], scale)
+dat_2[, 1:10] <- lapply(dat_2[, 1:10], scale)
+```
+
+## Trying the horseshoe prior
+
+Now that we have the data, let's try the horshoe prior.
+
+```{r, warning = FALSE, message = FALSE}
+library(rstanarm)
+
+options(mc.cores = parallel::detectCores())
+
+set.seed(1234)
+
+fit_1 <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9,
+                  data = dat_1,
+                  prior = hs(global_scale = 0.3/sqrt(nrow(dat_1))),
+                  refresh = 0,
+                  adapt_delta = 0.999)
+fit_2 <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9,
+                  data = dat_2,
+                  prior = hs(global_scale = 0.3/sqrt(nrow(dat_2))),
+                  refresh = 0,
+                  adapt_delta = 0.999)
+
+cat("Results from data set 1\n")
+summary(fit_1, digits = 3)
+
+cat("\n\nResults from data set 2\n")
+summary(fit_2, digits = 3)
+```
+
+There are several things I like about using regularized horeshoe priors in `rstanarm` rather than the Lasso.  
+
+1. I get an assessment of how reliable estimates of the regression coefficients are in addition to a point estimate of what they are. In this case you can see that the 95% credible intervals overlap 0 for every coefficient in analysis of the first data set, while only the credible intervals for `x3` don't overlap 0 in analysis of the second data set. Notice, however, that some of the intervals are very close to not overlapping 0, i.e., the intervals for `x1`, `x3`, and `x9` in the analysis of data set 1 and the intervals for `x1`, `x2`, and `x6` in the analysis of data set 2.
+
+2. I can also plot the estimates and their uncertainty very easily. Plotting the estimates and their uncertainty makes is much easier to pick out the covariates that seem to have an association with the response variable.[^4] Note: The outer intervals in these plots correspond to 90% credible intervals, not 95% credible intervals. You could change that by specifying `prob_outer = 0.95` in the call to `plot()`.
+
+```{r}
+p <- plot(fit_1) + ggtitle("Estimates from data set 1")
+print(p)
+p <- plot(fit_2) + ggtitle("Estimates from data set 2")
+print(p)
+```
+
+3. I can use the regularized horsehoe prior in a generalized mixed model with `stan_glmer()`. There is a package to fit the Lasso to a generalized mixed model with `lmer()`, but I haven't tried it, and it isn't built into `lmer()`.
+
+### How stable are the predictions?
+
+If you look back at earlier installments in this series, you'll see that the point estimates we got here aren't too different from what we've seen before, e.g., 0.185 for `x1` in data set 1 here _vs_. 0.239 in data set 1 from the Lasso. Using this Bayesian approach, however, we can see that even though `x3` isn't "significant" in the analysis of the first data set and is in the second,[^5] we don't have good evidence that the estimates are different, because the posterior distributions are broadly overlapping as evidenced by the broadly overlapping credible intervals. In other words, if we pay appropriate attention to the uncertainty of our estimates, they're pretty stable (at least across the two sample data sets we've been exploring).
+
+What about out of sample predictions?
+
+```{r}
+new_data <- data.frame(x1 = 4.0, x2 = 4.0, x3 = 4.0,
+                       x4 = 4.0, x5 = 4.0, x6 = 4.0,
+                       x7 = 4.0, x8 = 4.0, x9 = 4.0)
+predict_1 <- posterior_predict(fit_1, new_data, type = "response")
+predict_2 <- posterior_predict(fit_2, new_data, type = "response")
+
+summarize_posterior <- function(x, credible = 0.95, digits = 3) {
+  lo_p <- (1.0 - credible)/2.0
+  hi_p <- credible + lo_p
+  ci <- quantile(x, c(lo_p, hi_p))
+  cat(round(mean(x), 3), " (", round(ci[1], 3), ",", round(ci[2], 3), ")\n", sep = "")
+}
+
+cat("Data set 1\n")
+summarize_posterior(predict_1)
+cat("\nData set 2\n")
+summarize_posterior(predict_2)
+```
+
+Those are pretty close to the Lasso predictions, but we have the advantage that they include an indication of how reliable the estimates are. That's the good news. The bad news is that neither of the prediction intervals include the true value: 5.0. If you're getting the message that out of sample extrapolation is tricky, you're getting the righ message. Just imagine how much trickier it would be if the true relationship were non-linear rather than linear.
+
+## How do you pick the global scale
+
+If you're still paying attention (a) I congratulate you and (b) I owe you an explanation of how I picked `global_scale` in the call to `stan_glm()`. The explanation is simple. I followed the advice in the help page for "Prior distributions and options" in the `rstanarm` package, i.e., `help("priors")`. I set it to "the ratio of the expected number of non-zero coefficients divided by the square root of the number of observations." In this case I knew going in that 3 of the 9 coefficients should be non-zero, and I figured 0.3 was close enough to 1/3 to be reasonable. I played around with it, but I encourage you to try some other values. For example, instead of 0.3 in the code above try 0.1 and 0.8 to see how different your results are. 
+
+[^1]: Pironen, J., and A. Vehtari. 2017. Sparsity information and regularization in the horseshoe and other shrinkage priors. _Electronic Journal of Statistics_ 11(2):5018-5051. doi: [10.1214/17-EJS1337SI](https://doi.org/10.1214/17-EJS1337SI)
+
+[^2]: Note: You can check this easily using `prior_summary()`. See above (in HTML) or here (in an R notebook) to see how, using the builtin `mtcars` data set as an example.
+
+```{r}
+mtcars$mpg10 <- mtcars$mpg/10
+fit <- stan_glm(mpg10 ~ wt + cyl + am, data = mtcars, QR = FALSE, refresh = 0)
+prior_summary(fit)
+```
+
+[^3]: If you've been following along this far, you probably don't regard this last step as qualifying for the word "just", but it is the last step - really.
+
+[^4]: If you're uncomfortable with Bayesian inference, it's worth noting that the covariates identified in the two analyses are pretty similar. In fact, I singled out the same covariates as important in the analysis of data set 2 here as the Lasso identified, and all of the covariates I identified here in the analysis of data set 1 were also identified in analysis using the Lasso (the Lasso identified three more).
+
+[^5]: In the sense that the 95% credible interval for `x3` overlaps 0 in analysis of the first data set and doesn't in the second.
