@@ -142,6 +142,15 @@ column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
 colnames(dat_1) <- column_names
 colnames(dat_2) <- column_names
 
+## saving results in scale allows me to use them later for prediction with
+## new data
+##
+scale_1 <- lapply(dat_1[, 1:10], scale)
+scale_2 <- lapply(dat_2[, 1:10], scale)
+
+## when assigning the same scaling to a data frame, the scaling attributes
+## are lost
+##
 dat_1[, 1:10] <- lapply(dat_1[, 1:10], scale)
 dat_2[, 1:10] <- lapply(dat_2[, 1:10], scale)
 ```
@@ -200,8 +209,17 @@ What about out of sample predictions?
 new_data <- data.frame(x1 = 4.0, x2 = 4.0, x3 = 4.0,
                        x4 = 4.0, x5 = 4.0, x6 = 4.0,
                        x7 = 4.0, x8 = 4.0, x9 = 4.0)
-predict_1 <- posterior_predict(fit_1, new_data, type = "response")
-predict_2 <- posterior_predict(fit_2, new_data, type = "response")
+
+
+## re-scale the new data by subtracting mean and dividing by standard deviation
+##
+new_data_1 <- (new_data - lapply(scale_1[2:10], attr, "scaled:center")) /
+               lapply(scale_1[2:10], attr, "scaled:scale")
+new_data_2 <- (new_data - lapply(scale_2[2:10], attr, "scaled:center")) /
+               lapply(scale_2[2:10], attr, "scaled:scale")
+  
+predict_1 <- posterior_predict(fit_1, new_data_1, type = "response")
+predict_2 <- posterior_predict(fit_2, new_data_2, type = "response")
 
 summarize_posterior <- function(x, credible = 0.95, digits = 3) {
   lo_p <- (1.0 - credible)/2.0
@@ -212,11 +230,15 @@ summarize_posterior <- function(x, credible = 0.95, digits = 3) {
 
 cat("Data set 1\n")
 summarize_posterior(predict_1)
+cat("  True answer: ", beta0 + as.matrix(new_data_1) %*% beta, "\n", 
+    sep = "")
 cat("\nData set 2\n")
 summarize_posterior(predict_2)
+cat("  True answer: ", beta0 + as.matrix(new_data_2) %*% beta, "\n", 
+    sep = "")
 ```
 
-Those are pretty close to the Lasso predictions, but we have the advantage that they include an indication of how reliable the estimates are. That's the good news. The bad news is that neither of the prediction intervals include the true value: 5.0. If you're getting the message that out of sample extrapolation is tricky, you're getting the righ message. Just imagine how much trickier it would be if the true relationship were non-linear rather than linear.
+Those are pretty close to the Lasso predictions, but we have the advantage that they include an indication of how reliable the estimates are. That's the good news. The bad news is that neither of the prediction intervals include the true value.(Again, the true values differ because the scaling differs between the data sets.) If you're getting the message that out of sample extrapolation is tricky, you're getting the righ message. Just imagine how much trickier it would be if the true relationship were non-linear rather than linear.
 
 ## How do you pick the global scale
 

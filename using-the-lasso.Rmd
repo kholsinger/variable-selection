@@ -119,6 +119,15 @@ column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
 colnames(dat_1) <- column_names
 colnames(dat_2) <- column_names
 
+## saving results in scale allows me to use them later for prediction with
+## new data
+##
+scale_1 <- lapply(dat_1[, 1:10], scale)
+scale_2 <- lapply(dat_2[, 1:10], scale)
+
+## when assigning the same scaling to a data frame, the scaling attributes
+## are lost
+##
 dat_1[, 1:10] <- lapply(dat_1[, 1:10], scale)
 dat_2[, 1:10] <- lapply(dat_2[, 1:10], scale)
 ```
@@ -216,15 +225,24 @@ new_data <- data.frame(x1 = 4.0, x2 = 4.0, x3 = 4.0,
                        x4 = 4.0, x5 = 4.0, x6 = 4.0,
                        x7 = 4.0, x8 = 4.0, x9 = 4.0)
 
-predict_1 <- predict(lasso_1, as.matrix(new_data), s = "lambda.min")
-predict_2 <- predict(lasso_2, as.matrix(new_data), s = "lambda.min")
+## re-scale the new data by subtracting mean and dividing by standard deviation
+##
+new_data_1 <- (new_data - lapply(scale_1[2:10], attr, "scaled:center")) /
+               lapply(scale_1[2:10], attr, "scaled:scale")
+new_data_2 <- (new_data - lapply(scale_2[2:10], attr, "scaled:center")) /
+               lapply(scale_2[2:10], attr, "scaled:scale")
+  
+predict_1 <- predict(lasso_1, as.matrix(new_data_1), s = "lambda.min")
+predict_2 <- predict(lasso_2, as.matrix(new_data_2), s = "lambda.min")
 
 cat("Prediction from data set 1: ", round(predict_1, 3), "\n",
+    "  True answer:              ", beta0 + as.matrix(new_data_1) %*% beta, "\n",
     "Prediction from data set 2: ", round(predict_2, 3), "\n",
-    "True answer:                ", beta0 + as.matrix(new_data) %*% beta, "\n", sep = "")
+    "  True answer:              ", beta0 + as.matrix(new_data_2) %*% beta, "\n", 
+    sep = "")
 ```
 
-Those predictions don't seem quite as different as they did in the past, but they're both a long way from the true answer of 5. So here we have a case where the out of sample predictions seem fairly stable, which is good, but they're a long way off, which is bad.
+Those predictions don't seem quite as different as they did in the past, but they're both a long way from the true answers. (The true answers differ because of the different scaling of the two data sets.) So here we have a case where the out of sample predictions seem fairly stable, which is good, but they're a long way off, which is bad.
 
 ## Closing thoughts
 
