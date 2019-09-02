@@ -218,8 +218,8 @@ new_data_1 <- (new_data - lapply(scale_1[2:10], attr, "scaled:center")) /
 new_data_2 <- (new_data - lapply(scale_2[2:10], attr, "scaled:center")) /
                lapply(scale_2[2:10], attr, "scaled:scale")
   
-predict_1 <- posterior_predict(fit_1, new_data_1, type = "response")
-predict_2 <- posterior_predict(fit_2, new_data_2, type = "response")
+predict_1 <- posterior_predict(fit_1, new_data_1)
+predict_2 <- posterior_predict(fit_2, new_data_2)
 
 summarize_posterior <- function(x, credible = 0.95, digits = 3) {
   lo_p <- (1.0 - credible)/2.0
