@@ -166,16 +166,46 @@ options(mc.cores = parallel::detectCores())
 
 set.seed(1234)
 
+## n is the number of observations
+## D is the number of covariates
+## p0 is the expected number of important covariates
+##
+n <- nrow(dat_1)
+D <- ncol(dat_1[,2:10])
+p0 <- 3
+tau0 <- p0/(D - p0) * 1/sqrt(n)
+prior_coeff <- hs(global_scale = tau0, slab_scale = 1)
+
 fit_1 <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9,
                   data = dat_1,
-                  prior = hs(global_scale = 0.3/sqrt(nrow(dat_1))),
+                  prior = prior_coeff,
                   refresh = 0,
                   adapt_delta = 0.999)
+## Note: I use the same prior scale here because both data sets have the same number of observations
+## and the same expected number of important covariates
+##
 fit_2 <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9,
                   data = dat_2,
-                  prior = hs(global_scale = 0.3/sqrt(nrow(dat_2))),
+                  prior = prior_coeff,
                   refresh = 0,
                   adapt_delta = 0.999)
+
+predict_1 <- posterior_predict(fit_1)
+predict_2 <- posterior_predict(fit_2)
+
+for.plot <- data.frame(Observed = dat_1$y, Predicted = apply(predict_1, 2, mean))
+p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0) +
+  ggtitle("Data set 1")
+print(p)
+
+for.plot <- data.frame(Observed = dat_2$y, Predicted = apply(predict_2, 2, mean))
+p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0) +
+  ggtitle("Data set 1")
+print(p)
 
 cat("Results from data set 1\n")
 summary(fit_1, digits = 3)
@@ -242,7 +272,7 @@ Those are pretty close to the Lasso predictions, but we have the advantage that 
 
 ## How do you pick the global scale
 
-If you're still paying attention (a) I congratulate you and (b) I owe you an explanation of how I picked `global_scale` in the call to `stan_glm()`. The explanation is simple. I followed the advice in the help page for "Prior distributions and options" in the `rstanarm` package, i.e., `help("priors")`. I set it to "the ratio of the expected number of non-zero coefficients divided by the square root of the number of observations." In this case I knew going in that 3 of the 9 coefficients should be non-zero, and I figured 0.3 was close enough to 1/3 to be reasonable. I played around with it, but I encourage you to try some other values. For example, instead of 0.3 in the code above try 0.1 and 0.8 to see how different your results are. 
+If you're still paying attention (a) I congratulate you and (b) I owe you an explanation of how I set `prior_coeff` in the call to `stan_glm()`. The explanation is simple. I followed the advice in the help page for "Prior distributions and options" in the `rstanarm` package, i.e., `help("priors")`. I set it to "the ratio of the expected number of non-zero coefficients divided by the square root of the number of observations." In fact, I cheated even a little more than that. I simply modified the code at [https://mc-stan.org/projpred/articles/quickstart.html](https://mc-stan.org/projpred/articles/quickstart.html).[^6] I haven't played around with other values, but I encourage you to try some. For example, instead of 3 in the code above try 1 and 8 to see how different your results are. 
 
 [^1]: Pironen, J., and A. Vehtari. 2017. Sparsity information and regularization in the horseshoe and other shrinkage priors. _Electronic Journal of Statistics_ 11(2):5018-5051. doi: [10.1214/17-EJS1337SI](https://doi.org/10.1214/17-EJS1337SI)
 
@@ -259,3 +289,5 @@ prior_summary(fit)
 [^4]: If you're uncomfortable with Bayesian inference, it's worth noting that the covariates identified in the two analyses are pretty similar. In fact, I singled out the same covariates as important in the analysis of data set 2 here as the Lasso identified, and all of the covariates I identified here in the analysis of data set 1 were also identified in analysis using the Lasso (the Lasso identified three more).
 
 [^5]: In the sense that the 95% credible interval for `x3` overlaps 0 in analysis of the first data set and doesn't in the second.
+
+[^6]: If you visit [https://mc-stan.org/projpred/articles/quickstart.html](https://mc-stan.org/projpred/articles/quickstart.html), you'll see that it describes a package called `prodprej`. We'll explore that in the next installment.
