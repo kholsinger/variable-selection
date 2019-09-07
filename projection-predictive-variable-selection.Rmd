@@ -1,0 +1,172 @@
+---
+title: "Projection predictive feature selection"
+output: html_notebook
+---
+
+https://mc-stan.org/projpred/articles/quickstart.html 
+
+https://arxiv.org/abs/1810.02406
+
+https://link.springer.com/article/10.1007/s11222-016-9649-y
+
+## Setting up the data
+
+Once again we have to start by generating the data.
+```{r setup, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(cowplot)
+library(mvtnorm)
+library(corrplot)
+
+rm(list = ls())
+```
+
+```{r}
+## intetcept
+##
+beta0 <- 1.0
+## regression coefficients
+##
+beta <- c(1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+## pattern of correlation matrix, all non-zero entries are set to saem
+## correlation, covariance matrix caldulated from individual variances and a 
+## single association parameter governing the non-zero correlation coefficients
+##
+## Note: Not just any pattern will work here. The correlation matrix and
+## covariance matrix generated from this pattern must be positive definite.
+## If you change this pattern, you may get an error when you try to generate
+## data with a non-zero association parameter.
+##
+Rho <- matrix(nrow = 9, ncol = , byrow = TRUE, 
+              data = c(1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1
+                       ))
+## vector of standard deviations for covariates
+##
+sigma <- rep(1, 9)
+
+## construct a covariance matrix from the pattern, standard deviations, and
+## one parameter in [-1,1] that governs the magnitude of non-zero correlation
+## coefficients
+##
+## Rho - the pattern of associations
+## sigma - the vector of standard deviations
+## rho - the association parameter
+##
+construct_Sigma <- function(Rho, sigma, rho) {
+  ## get the correlation matris
+  ##
+  Rho <- Rho*rho
+  for (i in 1:ncol(Rho)) {
+    Rho[i,i] <- 1.0
+  }
+  ## notice the use of matrix multiplication
+  ##
+  Sigma <- diag(sigma) %*% Rho %*% diag(sigma)
+  return(Sigma)
+}
+
+## set the random number seed manually so that every run of the code will 
+## produce the same numbers
+##
+set.seed(1234)
+
+n_samp <- 100
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+
+resid <- rep(2.0, n_samp)
+
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_1 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_2 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat_1) <- column_names
+colnames(dat_2) <- column_names
+
+## saving results in scale allows me to use them later for prediction with
+## new data
+##
+scale_1 <- lapply(dat_1[, 1:10], scale)
+scale_2 <- lapply(dat_2[, 1:10], scale)
+
+## when assigning the same scaling to a data frame, the scaling attributes
+## are lost
+##
+dat_1[, 1:10] <- lapply(dat_1[, 1:10], scale)
+dat_2[, 1:10] <- lapply(dat_2[, 1:10], scale)
+```
+
+## Trying projection 
+
+```{r, warning = FALSE, message = FALSE}
+library(rstanarm)
+library(projpred)
+library(bayesplot)
+
+options(mc.cores = parallel::detectCores())
+
+n <- nrow(dat_1)
+D <- ncol(dat_1[,2:10])
+p0 <- 3
+tau0 <- p0/(D - p0) * 1/sqrt(n)
+prior_coeff <- hs(global_scale = tau0, slab_scale = 1)
+fit_1 <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9, data = dat_1, prior = prior_coeff,
+                  refresh = 0)
+
+vs_1 <- varsel(fit_1, method = "forward")
+cvs_1 <- cv_varsel(fit_1, method = "forward", verbose = FALSE)
+
+proj_size_1 <- suggest_size(cvs_1)
+varsel_plot(cvs_1, stats = c("elpd", "rmse"), deltas = TRUE)
+proj_1 <- project(vs_1, nv = proj_size_1, ns = 2000)
+mcmc_intervals(as.matrix(proj_1),
+               pars = c("(Intercept)", names(vs_1$vind[1:proj_size_1]), "sigma"))
+
+summarize_posterior <- function(x, credible = 0.95, digits = 3) {
+  lo_p <- (1.0 - credible)/2.0
+  hi_p <- credible + lo_p
+  ci <- quantile(x, c(lo_p, hi_p))
+  results <- sprintf("% 5.3f (% 5.3f, % 5.3f)\n", mean(x), ci[1], ci[2])
+  cat(results, sep = "")
+}
+
+summarize_results <- function(x, credible = 0.95, digits = 3) {
+  vars <- colnames(as.matrix(x))
+  for (i in 1:length(vars)) {
+    label <- sprintf("%11s: ", vars[i])
+    cat(label, sep = "")
+    summarize_posterior(as.matrix(x)[,i])
+  }
+}
+
+summarize_results(proj_1)
+
+pred_1 <- proj_linpred(vs_1, xnew = dat_1[, 2:10], ynew = dat_1$y, nv = proj_size_1, integrated = TRUE)
+for.plot <- data.frame(Observed = dat_1$y,
+                       Predicted = pred_1$pred)
+p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) + 
+  geom_point() + 
+  geom_abline(slope = 1, intercept = 0) +
+  labs(x = "Observed", y = "Predicted")
+print(p)
+
+print(summary(lm(Predicted ~ Observed, data = for.plot)))
+```
+
