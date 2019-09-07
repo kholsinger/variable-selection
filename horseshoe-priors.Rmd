@@ -197,13 +197,15 @@ for.plot <- data.frame(Observed = dat_1$y, Predicted = apply(predict_1, 2, mean)
 p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) +
   geom_point() +
   geom_abline(slope = 1, intercept = 0) +
-  ggtitle("Data set 1")
+  geom_smooth(method = "lm")
+  ggtitle("Data set 1") +
 print(p)
 
 for.plot <- data.frame(Observed = dat_2$y, Predicted = apply(predict_2, 2, mean))
 p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) +
   geom_point() +
   geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "lm")
   ggtitle("Data set 1")
 print(p)
 
