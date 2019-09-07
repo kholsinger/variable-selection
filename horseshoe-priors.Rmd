@@ -238,7 +238,7 @@ cat("  True answer: ", beta0 + as.matrix(new_data_2) %*% beta, "\n",
     sep = "")
 ```
 
-Those are pretty close to the Lasso predictions, but we have the advantage that they include an indication of how reliable the estimates are. That's the good news. The bad news is that neither of the prediction intervals include the true value.(Again, the true values differ because the scaling differs between the data sets.) If you're getting the message that out of sample extrapolation is tricky, you're getting the righ message. Just imagine how much trickier it would be if the true relationship were non-linear rather than linear.
+Those are pretty close to the Lasso predictions, but we have the advantage that they include an indication of how reliable the estimates are, and you can see that we don't have good evidence that the predictions are different from one another even though the point estimates look fairly different. That's the good news. The bad news is that neither of the prediction intervals include the true value.(Again, the true values differ because the scaling differs between the data sets.) If you're getting the message that out of sample extrapolation is tricky, you're getting the righ message. Just imagine how much trickier it would be if the true relationship were non-linear rather than linear.
 
 ## How do you pick the global scale
 

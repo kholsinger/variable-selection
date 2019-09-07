@@ -246,7 +246,7 @@ Those predictions don't seem quite as different as they did in the past, but the
 
 ## Closing thoughts
 
-So the Lasso is promising in some ways, but there is another problem you may encounter that could limit its usefulness. You'll notice that the results from `coef()` don't include a standard error. That's because Lasso estimates can be very biased, meaning that the standard error may not be a good estimate of how reliable a regression coefficient is.[^6] 
+So the Lasso is promising in some ways, but beyond the usual challenges associated with out of sample extrapolation, there is another problem that limits its usefulness. You'll notice that the results from `coef()` don't include a standard error. That's because Lasso estimates can be very biased, meaning that the standard error may not be a good estimate of how reliable a regression coefficient is.[^6] 
 
 The Lasso is the simplest example of what's known as _regularized regression_. `glmnet()` can fit logistic, Poisson, and Cox proportional hazard models as well as simple linear models, and by varying the `alpha` parameter in the call to `glmnet()` you can get a result anywhere from ridge regresssion (with `alpha` = 0) to the Lasso (with `alpha` = 1). Values of `alpha` between 0 and 1 correspond to an "elastic net." See the notes Trevor Hastie and Junyiang Qian developed for more details.[^7]
 
@@ -257,7 +257,7 @@ The Lasso is the simplest example of what's known as _regularized regression_. `
 
 [^3]: You could check that more formally by calculating the $R^2$ for the test data set and comparing it to the training set. I haven't done that, but eyeballing it suggests that they'd be pretty close.
 
-[^4]: The black line is a 1:1 line. The slope of the regression of Predicted on Observed is less than 1.
+[^4]: The black line is a 1:1 line. The slope of the regression of Predicted on Observed is less than 1. In fact, if you run `lm()` on `Predicted` vs. `Observed`, you'll find that the slope is 0.415 for data set 1 and 0.514, which are precisely the multiple R-squared from the corresponding multiple regressions.
 
 [^5]: The `predict()` method for our lasso model has a slightly different interface than we've seen before.
 
