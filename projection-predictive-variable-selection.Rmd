@@ -11,7 +11,7 @@ https://link.springer.com/article/10.1007/s11222-016-9649-y
 
 ## Setting up the data
 
-Once again we have to start by generating the data.
+As usual, we have to start by generating the data.
 ```{r setup, warning = FALSE, message = FALSE}
 library(tidyverse)
 library(reshape2)
@@ -115,6 +115,7 @@ dat_2[, 1:10] <- lapply(dat_2[, 1:10], scale)
 
 ## Trying projection 
 
+Since we'll be running the projection predictive analysis on both data sets, I've written a small function, `projection_prediction()` that will run everything for us and collect the results. Notice that we start by fitting the full model with [horseshoe priors](http://darwin.eeb.uconn.edu/uncommon-ground/blog/2019/09/16/a-bayesian-approach-to-variable-selection-using-horseshoe-priors/).
 ```{r, warning = FALSE, message = FALSE}
 library(rstanarm)
 library(projpred)
@@ -122,22 +123,36 @@ library(bayesplot)
 
 options(mc.cores = parallel::detectCores())
 
-n <- nrow(dat_1)
-D <- ncol(dat_1[,2:10])
-p0 <- 3
-tau0 <- p0/(D - p0) * 1/sqrt(n)
-prior_coeff <- hs(global_scale = tau0, slab_scale = 1)
-fit_1 <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9, data = dat_1, prior = prior_coeff,
-                  refresh = 0)
+projection_prediction <- function(dat) {
+  n <- nrow(dat)
+  D <- ncol(dat[,2:10])
+  p0 <- 3
+  tau0 <- p0/(D - p0) * 1/sqrt(n)
+  prior_coeff <- hs(global_scale = tau0, slab_scale = 1)
+  fit <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9, data = dat, 
+                  prior = prior_coeff, refresh = 0)
 
-vs_1 <- varsel(fit_1, method = "forward")
-cvs_1 <- cv_varsel(fit_1, method = "forward", verbose = FALSE)
+  vs <- varsel(fit, method = "forward")
+  cvs <- cv_varsel(fit, method = "forward", verbose = FALSE)
 
-proj_size_1 <- suggest_size(cvs_1)
-varsel_plot(cvs_1, stats = c("elpd", "rmse"), deltas = TRUE)
-proj_1 <- project(vs_1, nv = proj_size_1, ns = 2000)
-mcmc_intervals(as.matrix(proj_1),
-               pars = c("(Intercept)", names(vs_1$vind[1:proj_size_1]), "sigma"))
+  proj_size <- suggest_size(cvs)
+  proj <- project(vs, nv = proj_size, ns = 2000)
+  mcmc_intervals(as.matrix(proj),
+                 pars = c("(Intercept)", names(vs$vind[1:proj_size]), "sigma"))
+
+  pred <- proj_linpred(vs, xnew = dat[, 2:10], ynew = dat$y, 
+                       nv = proj_size, integrated = TRUE)
+  for.plot <- data.frame(Observed = dat$y,
+                         Predicted = pred$pred)
+  p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) + 
+    geom_point() + 
+    geom_smooth(method = "lm") +
+    geom_abline(slope = 1, intercept = 0) +
+    labs(x = "Observed", y = "Predicted")
+  print(p)
+
+  return(list(proj = proj, vs = vs, cvs = cvs, proj_size = proj_size))
+}
 
 summarize_posterior <- function(x, credible = 0.95, digits = 3) {
   lo_p <- (1.0 - credible)/2.0
@@ -156,17 +171,76 @@ summarize_results <- function(x, credible = 0.95, digits = 3) {
   }
 }
 
-summarize_results(proj_1)
-
-pred_1 <- proj_linpred(vs_1, xnew = dat_1[, 2:10], ynew = dat_1$y, nv = proj_size_1, integrated = TRUE)
-for.plot <- data.frame(Observed = dat_1$y,
-                       Predicted = pred_1$pred)
-p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) + 
-  geom_point() + 
-  geom_abline(slope = 1, intercept = 0) +
-  labs(x = "Observed", y = "Predicted")
-print(p)
-
-print(summary(lm(Predicted ~ Observed, data = for.plot)))
+proj_1 <- projection_prediction(dat_1)
+proj_2 <- projection_prediction(dat_2)
+summarize_results(proj_1$proj)
+summarize_results(proj_2$proj)
 ```
+Here we have results that are quite different from one another. Not only is the coefficient on `x3` quite different in the two data sets,[^1] but the variables identified as important are different: `x3` and `x1` in analysis of the first data set and `x3` and `x6` in the second data set. That isn't quite as disturbing as it might first appear. Look back at the results from our regression with horseshoe priors on all of the data. You'll see that `x1` and `x3` had a greater magnitude in analysis of the first data set than any other covariates. Similarly, `x3` and `x6` were the most important in analysis of the second data set.
 
+## Picking the number of covariates
+
+In the code I ran above I used `suggest_size()` to pick the number of covariates to use. If you read the documentation for `suggest_size()`[^2] you'll notice this sentence in the Description:
+
+> It is recommended that the user studies the results via `varsel_plot` and/or `varsel_stats` and makes the final decision based on what is most appropriate for the given problem.
+
+Let's take a look at the results from `varsel_plot()` first.
+
+```{r}
+print(varsel_plot(proj_1$cvs, stats = c("elpd", "rmse"), deltas = TRUE))
+print(varsel_plot(proj_2$cvs, stats = c("elpd", "rmse"), deltas = TRUE))
+```
+`elpd` abd `rmse` are measures of how well a model fits the data.[^3] The complete model in our example includes 9 parameters. You can see that in the first data set a model with only 2 covariates works almost as well as the full model, although the model with 3 covariates looks as if it might work a little better. In the second data set, there is clearly no advantage to including more than 2 covariates.
+
+The pictures are pretty clear, but let's look at some the differences numerically using `varsel_stats()`. We'll focus on `rmse`.
+
+```{r}
+stats_1 <- varsel_stats(proj_1$cvs) %>% 
+  mutate(diff = elpd - last(elpd), percdiff = diff/last(elpd))
+stats_2 <- varsel_stats(proj_2$cvs) %>% 
+  mutate(diff = elpd - last(elpd), percdiff = diff/last(elpd))
+
+print(round(stats_1, 3))
+print(round(stats_2, 3))
+```
+By default `suggest_size()` identifies the smallest model where `elpd` is within one standard deviation (`elpd.se`) of the full model. In both data sets that happens when two covariates are included. You will notice, however, that just as a model with 3 parameters looked as if it might be a little better than one with only 2 for the first data set,[4] here the model with 3 parameters improves the model with 2 parameters by 0.028, which is more than twice the improvement made by any incuding any additional parameters. This suggests to me that it probably worth looking at the results from the first data set where we include 3 covariates instead of 2.
+
+```{r}
+proj_1_3 <- project(proj_1$vs, nv = 3, ns = 2000)
+summarize_results(proj_1_3)
+```
+That's rather interesting. It picked out the "right" coefficients, in the sense that there the ones we set as non-zero in generating the data, and it also got the "right" signs for them. Notice also that the coefficient on `x2` is substantially larger than it is in the analysis of the full model with horseshoe priors (again ignoring the very broad overlap in credible intervals).
+
+We don't have a good reason to look at a model with more than 2 covariates in the second data set, but let's try it with 3 and see what happens.
+
+```{r}
+proj_2_3 <- project(proj_2$vs, nv = 3, ns = 2000)
+summarize_results(proj_2_3)
+```
+That did bring in `x1`, which we know ought to be there. But again, the only reason we have to prefer this model given these data is our prior knowledge that `x3` ought to be in the model. 
+
+## Conclusions
+
+If you can run a regression model in `stan_glm()` or `stan_glmer()`, you can easily use horseshoe priors. And if you can do that, you can easily use projection predictive variable selection to identtify the "most important" set of covariates. The simple example here suggests a couple of things:
+
+1. Be sure to examine `varsel_plot()`, `varsel_stats()`, or both rather than simply relying on `suggest_size()` to tell you how many covariates to include.
+
+2. It's probably worth your time to take a look at models that include one or two more parameters than what your examination of `varsel_plot()` and `varsel_stats()` suggest. You'll need to bring in your subject matter knowledge here,[^5] but there might be a covariate with an association worth considering based on subtantive grounds, even if it's not "significant" in a conventional sense.
+
+That last point raises a much broader issue that I'll return to in the last blog post in this series, where I try to summarize the lessons we've learned and provide some general guidelines. The difference between "significant" and "not Significant" is not itself statistically significant.[^6]
+
+[^1]: I'm being sloppy here. I should have said "the _posterior means_ for `x3` is quite different, but the posterior distribution overlaps quite broadly."
+
+[^2]: You should always, _always_, _**always**_ read the documentation.
+
+[^3]: `rmse` is the easiest to understand. It's the "root mean squared error", i.e., the square root of the average squared error (squared residual) across all observations. If $x_i$ is the $i$th observation and $\mu_i$ is the prediction for that observation, then 
+$$
+rmse = \sqrt{\sum_i (x_i - \mu_i)^2} \quad .
+$$
+`rmse` is an appropriate measure only for models where the residual variance is normally distributed. `elpd` is a more general measure that can be used with any model that `rstanarm` fits.
+
+[^4]: So long as you pay attention only to the posterior means and not their standard errors.
+
+[^5]: Since you won't know the truth as we did here.
+
+[^6]: That's the title of a paper by Andrew Gelman and Hal Stern in _The American Statistician_. doi: [10.1198/000313006X152649](https://doi.org/10.1198/000313006X152649)
