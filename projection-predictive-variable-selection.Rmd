@@ -2,12 +2,17 @@
 title: "Projection predictive feature selection"
 output: html_notebook
 ---
+## Overview
 
-https://mc-stan.org/projpred/articles/quickstart.html 
+Pironen and Vehtari ([_Statistical Computing_ 27:711-735; 2017](http://dx.doi.org/10.1007/s11222-016-9649-y)) present a very comprehensive overview of methods for model selection in a Bayesian context. I encourage you to read the whole thing, but this notebook is going to introduce only the best performing of the methods they review: projection predictive feature selection. Let's unpack what that means, starting with "feature selection."
 
-https://arxiv.org/abs/1810.02406
+Feature selection is just another name for "variable selection." What's different here from what we saw with horseshoe priors is that rather than simply looking at the posterior estimates and saying to ourselves "These variables (features) seem important and thoee don't", projection predictive feature selection provides a statistical criterion to help us identify the important variables (features).
 
-https://link.springer.com/article/10.1007/s11222-016-9649-y
+What about the "projection prediction" part? Well, that's a bit more complicated. You'll need to read Pironen and Vehtari to get all of the details, but here it is in a nutshell.
+
+We start with a full model that (we think) includes all of the covariates that could be relevant in predicting the response. Now imagine that we examine reduced models that don't include all of the covariates, _*but*_ instead of fitting those reduced models to the data and comparing their performance in predicting the data we fit them to data _*predicted*_ from the full model, i.e., its posterior predictions, and find the reduced model that does the "best job" of matching the posterior predictions. By "best job" we mean that we pick the model with the smallest number of covariates we can while keeping the predictive performance of the reduced model about the same as the full model.
+
+While it may seem strange to pick covariates based on how well models perform on _*predicted*_ rather than _*observed*_ data, Pironen and Vehtari show that this approach works very well when compared with other alternatives that have been suggested. And they've put together a very nice package, `projpred` that makes it easy to use the approach.
 
 ## Setting up the data
 
@@ -176,7 +181,7 @@ proj_2 <- projection_prediction(dat_2)
 summarize_results(proj_1$proj)
 summarize_results(proj_2$proj)
 ```
-Here we have results that are quite different from one another. Not only is the coefficient on `x3` quite different in the two data sets,[^1] but the variables identified as important are different: `x3` and `x1` in analysis of the first data set and `x3` and `x6` in the second data set. That isn't quite as disturbing as it might first appear. Look back at the results from our regression with horseshoe priors on all of the data. You'll see that `x1` and `x3` had a greater magnitude in analysis of the first data set than any other covariates. Similarly, `x3` and `x6` were the most important in analysis of the second data set.
+Here we have results that are quite different from one another. Not only is the coefficient on `x3` quite different in the two data sets,[^1] but the variables identified as important are different: `x3` and `x1` in analysis of the first data set and `x3` and `x6` in the second data set. That isn't quite as disturbing as it might first appear. Look back at the results from our regression with [horseshoe priors](http://darwin.eeb.uconn.edu/pages/variable-selection/horseshoe-priors.nb.html) on all of the data. You'll see that `x1` and `x3` had a greater magnitude in analysis of the first data set than any other covariates. Similarly, `x3` and `x6` were the most important in analysis of the second data set.
 
 ## Picking the number of covariates
 
@@ -192,7 +197,7 @@ print(varsel_plot(proj_2$cvs, stats = c("elpd", "rmse"), deltas = TRUE))
 ```
 `elpd` abd `rmse` are measures of how well a model fits the data.[^3] The complete model in our example includes 9 parameters. You can see that in the first data set a model with only 2 covariates works almost as well as the full model, although the model with 3 covariates looks as if it might work a little better. In the second data set, there is clearly no advantage to including more than 2 covariates.
 
-The pictures are pretty clear, but let's look at some the differences numerically using `varsel_stats()`. We'll focus on `rmse`.
+The pictures are pretty clear, but let's look at some the differences numerically using `varsel_stats()`. We'll focus on `elpd`.
 
 ```{r}
 stats_1 <- varsel_stats(proj_1$cvs) %>% 
@@ -203,7 +208,7 @@ stats_2 <- varsel_stats(proj_2$cvs) %>%
 print(round(stats_1, 3))
 print(round(stats_2, 3))
 ```
-By default `suggest_size()` identifies the smallest model where `elpd` is within one standard deviation (`elpd.se`) of the full model. In both data sets that happens when two covariates are included. You will notice, however, that just as a model with 3 parameters looked as if it might be a little better than one with only 2 for the first data set,[4] here the model with 3 parameters improves the model with 2 parameters by 0.028, which is more than twice the improvement made by any incuding any additional parameters. This suggests to me that it probably worth looking at the results from the first data set where we include 3 covariates instead of 2.
+By default `suggest_size()` identifies the smallest model where `elpd` is within one standard deviation (`elpd.se`) of the full model. In both data sets that happens when two covariates are included. You will notice, however, that just as a model with 3 parameters looked as if it might be a little better than one with only 2 for the first data set,[^4] here the model with 3 parameters improves the model with 2 parameters by 0.028, which is more than twice the improvement made by any incuding any additional parameters. This suggests to me that it probably worth looking at the results from the first data set where we include 3 covariates instead of 2.
 
 ```{r}
 proj_1_3 <- project(proj_1$vs, nv = 3, ns = 2000)
@@ -229,7 +234,7 @@ If you can run a regression model in `stan_glm()` or `stan_glmer()`, you can eas
 
 That last point raises a much broader issue that I'll return to in the last blog post in this series, where I try to summarize the lessons we've learned and provide some general guidelines. The difference between "significant" and "not Significant" is not itself statistically significant.[^6]
 
-[^1]: I'm being sloppy here. I should have said "the _posterior means_ for `x3` is quite different, but the posterior distribution overlaps quite broadly."
+[^1]: I'm being sloppy here. I should have said "the _posterior means_ for `x3` are quite different, but the posterior distribution overlaps quite broadly."
 
 [^2]: You should always, _always_, _**always**_ read the documentation.
 
