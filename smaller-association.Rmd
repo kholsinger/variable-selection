@@ -1,0 +1,297 @@
+---
+title: "Do we do better when covariates are less associated"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*.
+
+NOTE: Data not scaled so that regression coefficients are _more_ comparable across the two data sets.
+
+```{r setup, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(cowplot)
+library(mvtnorm)
+library(corrplot)
+
+rm(list = ls())
+```
+
+```{r}
+## intetcept
+##
+beta0 <- 1.0
+## regression coefficients
+##
+beta <- c(1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+## pattern of correlation matrix, all non-zero entries are set to saem
+## correlation, covariance matrix caldulated from individual variances and a 
+## single association parameter governing the non-zero correlation coefficients
+##
+## Note: Not just any pattern will work here. The correlation matrix and
+## covariance matrix generated from this pattern must be positive definite.
+## If you change this pattern, you may get an error when you try to generate
+## data with a non-zero association parameter.
+##
+Rho <- matrix(nrow = 9, ncol = , byrow = TRUE, 
+              data = c(1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1,
+                       0,1,0,1,0,1,0,1,0,
+                       1,0,1,0,1,0,1,0,1
+                       ))
+## vector of standard deviations for covariates
+##
+sigma <- rep(1, 9)
+
+## construct a covariance matrix from the pattern, standard deviations, and
+## one parameter in [-1,1] that governs the magnitude of non-zero correlation
+## coefficients
+##
+## Rho - the pattern of associations
+## sigma - the vector of standard deviations
+## rho - the association parameter
+##
+construct_Sigma <- function(Rho, sigma, rho) {
+  ## get the correlation matris
+  ##
+  Rho <- Rho*rho
+  for (i in 1:ncol(Rho)) {
+    Rho[i,i] <- 1.0
+  }
+  ## notice the use of matrix multiplication
+  ##
+  Sigma <- diag(sigma) %*% Rho %*% diag(sigma)
+  return(Sigma)
+}
+
+## set the random number seed manually so that every run of the code will 
+## produce the same numbers
+##
+set.seed(1234)
+
+n_samp <- 100
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+
+resid <- rep(2.0, n_samp)
+
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_1 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.8))
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_2 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat_1) <- column_names
+colnames(dat_2) <- column_names
+```
+
+### Correlation plots with `rho = 0.8`
+
+```{r}
+corrplot(cor(dat_1[, -c(1,11)]))
+corrplot(cor(dat_2[, -c(1,11)]))
+corr_08_1 <- max(abs(cor(dat_1[, -c(1,11)]) - diag(1, 9)))
+corr_08_2 <- max(abs(cor(dat_2[, -c(1,11)]) - diag(1, 9)))
+```
+
+### Correlation plots with `rho = 0.2`
+
+```{r}
+n_samp <- 100
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.2))
+
+resid <- rep(2.0, n_samp)
+
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_1 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+cov_str <- rmvnorm(n_samp,
+                   mean = rep(0, nrow(Rho)),
+                   sigma = construct_Sigma(Rho, sigma, 0.2))
+y_str <- rnorm(nrow(cov_str), mean = beta0 + cov_str %*% beta, sd = resid)
+dat_2 <- data.frame(y_str, cov_str, rep("Strong", length(y_str)))
+
+column_names <- c("y", paste("x", seq(1, length(beta)), sep = ""), "Scenario")
+colnames(dat_1) <- column_names
+colnames(dat_2) <- column_names
+
+corrplot(cor(dat_1[, -c(1,11)]))
+corrplot(cor(dat_2[, -c(1,11)]))
+corr_02_1 <- max(abs(cor(dat_1[, -c(1,11)]) - diag(1, 9)))
+corr_02_2 <- max(abs(cor(dat_2[, -c(1,11)]) - diag(1, 9)))
+```
+
+The correlation in data set 1 (rho = 0.8): `r round(corr_08_1, 3)`
+
+The correlation in data set 2 (rho = 0.8): `r round(corr_08_2, 3)`
+
+The correlation in data set 1 (rho = 0.2): `r round(corr_02_1, 3)`
+
+The correlation in data set 2 (rho = 0.2): `r round(corr_02_2, 3)`
+
+
+
+## Horseshoe priors
+
+```{r, warning = FALSE, message = FALSE}
+library(rstanarm)
+
+options(mc.cores = parallel::detectCores())
+
+set.seed(1234)
+
+## n is the number of observations
+## D is the number of covariates
+## p0 is the expected number of important covariates
+##
+n <- nrow(dat_1)
+D <- ncol(dat_1[,2:10])
+p0 <- 3
+tau0 <- p0/(D - p0) * 1/sqrt(n)
+prior_coeff <- hs(global_scale = tau0, slab_scale = 1)
+
+fit_1 <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9,
+                  data = dat_1,
+                  prior = prior_coeff,
+                  refresh = 0,
+                  adapt_delta = 0.999)
+## Note: I use the same prior scale here because both data sets have the same number of observations
+## and the same expected number of important covariates
+##
+fit_2 <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9,
+                  data = dat_2,
+                  prior = prior_coeff,
+                  refresh = 0,
+                  adapt_delta = 0.999)
+
+predict_1 <- posterior_predict(fit_1)
+predict_2 <- posterior_predict(fit_2)
+
+for.plot <- data.frame(Observed = dat_1$y, Predicted = apply(predict_1, 2, mean))
+p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "lm") +
+  ggtitle("Data set 1")
+print(p)
+
+for.plot <- data.frame(Observed = dat_2$y, Predicted = apply(predict_2, 2, mean))
+p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "lm") +
+  ggtitle("Data set 2")
+print(p)
+
+p <- plot(fit_1) + ggtitle("Estimates from data set 1")
+print(p)
+p <- plot(fit_2) + ggtitle("Estimates from data set 2")
+print(p)
+
+summary(fit_1, digits = 3)
+summary(fit_2, digits = 3)
+
+new_data <- data.frame(x1 = 4.0, x2 = 4.0, x3 = 4.0,
+                       x4 = 4.0, x5 = 4.0, x6 = 4.0,
+                       x7 = 4.0, x8 = 4.0, x9 = 4.0)
+
+predict_1 <- posterior_predict(fit_1, new_data)
+predict_2 <- posterior_predict(fit_2, new_data)
+
+summarize_posterior <- function(x, credible = 0.95, digits = 3) {
+  lo_p <- (1.0 - credible)/2.0
+  hi_p <- credible + lo_p
+  ci <- quantile(x, c(lo_p, hi_p))
+  cat(round(mean(x), 3), " (", round(ci[1], 3), ",", round(ci[2], 3), ")\n", sep = "")
+}
+
+summarize_posterior(predict_1)
+cat("  True answer: ", beta0 + as.matrix(new_data) %*% beta, "\n", 
+    sep = "")
+summarize_posterior(predict_2)
+cat("  True answer: ", beta0 + as.matrix(new_data) %*% beta, "\n", 
+    sep = "")
+
+```
+
+## Projection prediction
+
+```{r, warning = FALSE, message = FALSE}
+library(rstanarm)
+library(projpred)
+library(bayesplot)
+
+options(mc.cores = parallel::detectCores())
+
+projection_prediction <- function(dat) {
+  n <- nrow(dat)
+  D <- ncol(dat[,2:10])
+  p0 <- 3
+  tau0 <- p0/(D - p0) * 1/sqrt(n)
+  prior_coeff <- hs(global_scale = tau0, slab_scale = 1)
+  fit <- stan_glm(y ~ x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9, data = dat, 
+                  prior = prior_coeff, refresh = 0)
+
+  vs <- varsel(fit, method = "forward")
+  cvs <- cv_varsel(fit, method = "forward", verbose = FALSE)
+
+  proj_size <- suggest_size(cvs)
+  proj <- project(vs, nv = proj_size, ns = 2000)
+  mcmc_intervals(as.matrix(proj),
+                 pars = c("(Intercept)", names(vs$vind[1:proj_size]), "sigma"))
+
+  pred <- proj_linpred(vs, xnew = dat[, 2:10], ynew = dat$y, 
+                       nv = proj_size, integrated = TRUE)
+  for.plot <- data.frame(Observed = dat$y,
+                         Predicted = pred$pred)
+  p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) + 
+    geom_point() + 
+    geom_smooth(method = "lm") +
+    geom_abline(slope = 1, intercept = 0) +
+    labs(x = "Observed", y = "Predicted")
+  print(p)
+
+  return(list(proj = proj, vs = vs, cvs = cvs, proj_size = proj_size))
+}
+
+summarize_posterior <- function(x, credible = 0.95, digits = 3) {
+  lo_p <- (1.0 - credible)/2.0
+  hi_p <- credible + lo_p
+  ci <- quantile(x, c(lo_p, hi_p))
+  results <- sprintf("% 5.3f (% 5.3f, % 5.3f)\n", mean(x), ci[1], ci[2])
+  cat(results, sep = "")
+}
+
+summarize_results <- function(x, credible = 0.95, digits = 3) {
+  vars <- colnames(as.matrix(x))
+  for (i in 1:length(vars)) {
+    label <- sprintf("%11s: ", vars[i])
+    cat(label, sep = "")
+    summarize_posterior(as.matrix(x)[,i])
+  }
+}
+
+proj_1 <- projection_prediction(dat_1)
+proj_2 <- projection_prediction(dat_2)
+summarize_results(proj_1$proj)
+summarize_results(proj_2$proj)
+
+print(varsel_plot(proj_1$cvs, stats = c("elpd", "rmse"), deltas = TRUE))
+print(varsel_plot(proj_2$cvs, stats = c("elpd", "rmse"), deltas = TRUE))
+
+```
