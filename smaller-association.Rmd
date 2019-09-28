@@ -1,13 +1,16 @@
 ---
-title: "Do we do better when covariates are less associated"
-output: html_notebook
+title: "Do we do better when covariates are less associated?"
+output: 
+  html_notebook:
+    toc: true
+    toc_float: 
+      collapsed: false
 ---
+## Introduction
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+Unlike previous notebooks, there isn't anything new here. What you'll see instead is analysis of two data sets generated with less association among the covariates than the data sets you've seen in earlier notebooks. The analysis will use `rstanarm`, horseshoe priors, and projection prediction variable selection.
 
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*.
-
-NOTE: Data not scaled so that regression coefficients are _more_ comparable across the two data sets.
+NOTE: Data the data not scaled so that regression coefficients are _more_ comparable across the two data sets. You may want to return to some of the earlier notebooks where the data were scaled and re-run the analyses to see how the results change.
 
 ```{r setup, warning = FALSE, message = FALSE}
 library(tidyverse)
@@ -136,17 +139,21 @@ corr_02_1 <- max(abs(cor(dat_1[, -c(1,11)]) - diag(1, 9)))
 corr_02_2 <- max(abs(cor(dat_2[, -c(1,11)]) - diag(1, 9)))
 ```
 
-The correlation in data set 1 (rho = 0.8): `r round(corr_08_1, 3)`
+The correlation plots make it clear that the magnitude of associations among covariates is much greater with `rho = 0.8` than it is with `rho = 0.2`, but let's look at the numerical results.
 
-The correlation in data set 2 (rho = 0.8): `r round(corr_08_2, 3)`
+The maximum correlation in data set 1 (rho = 0.8): `r round(corr_08_1, 3)`
 
-The correlation in data set 1 (rho = 0.2): `r round(corr_02_1, 3)`
+The maximum correlation in data set 2 (rho = 0.8): `r round(corr_08_2, 3)`
 
-The correlation in data set 2 (rho = 0.2): `r round(corr_02_2, 3)`
+The maximum correlation in data set 1 (rho = 0.2): `r round(corr_02_1, 3)`
 
+The maximum correlation in data set 2 (rho = 0.2): `r round(corr_02_2, 3)`
 
+In everything that follows, we'll be working with the data sets generated when `rho = 0.2`.
 
 ## Horseshoe priors
+
+We'll be working with the data set generated with relatively weak associations among covariates for the rest of this exercise, and we'll start with horsehoe priors.[^1]
 
 ```{r, warning = FALSE, message = FALSE}
 library(rstanarm)
@@ -226,10 +233,13 @@ cat("  True answer: ", beta0 + as.matrix(new_data) %*% beta, "\n",
 summarize_posterior(predict_2)
 cat("  True answer: ", beta0 + as.matrix(new_data) %*% beta, "\n", 
     sep = "")
-
 ```
 
+That looks pretty encouraging. In both cases, `x1`, `x2`, and `x3` are picked out as being important, and the estimated coefficients for each are relatively close to the values used to generate the data. The evidence for an association involving any of the other covariates is pretty weak.
+
 ## Projection prediction
+
+Now let's try projection prediction to see how many variables we'd include in a model and which ones they are if we wanted explicitly to simplify the model rather than directly interpreting coefficients of the full model. 
 
 ```{r, warning = FALSE, message = FALSE}
 library(rstanarm)
@@ -288,10 +298,139 @@ summarize_results <- function(x, credible = 0.95, digits = 3) {
 
 proj_1 <- projection_prediction(dat_1)
 proj_2 <- projection_prediction(dat_2)
-summarize_results(proj_1$proj)
-summarize_results(proj_2$proj)
 
 print(varsel_plot(proj_1$cvs, stats = c("elpd", "rmse"), deltas = TRUE))
 print(varsel_plot(proj_2$cvs, stats = c("elpd", "rmse"), deltas = TRUE))
-
+summarize_results(proj_1$proj)
+summarize_results(proj_2$proj)
 ```
+
+Good news! Using projection prediction to select the "important" covariates identified the same three covariates our examination of the full model suggested to us _*and*_ those are the variables we know ore important.
+
+Bottom line: If associations among your covariates are modest, if you have a reasonably large amount of data, _*and if your covariates include all of those that have a real relationship with the response variable*_, then you have a good chance of detecting the relationships and of estimating their magnitude. But what happens if the "true" predictors are among the covariates included in your study?
+
+## What if the "true" predictors aren't in the data?
+
+In our case the true predictors are `x1`, `x2`, and `x3`. We know that they influence influence `y` and that no other covariates do, because we generated the data that way. What happens if we fit a model that excludes `x1`, `x2`, and `x3` and includes only covariates that we know don't have a "real" relationship to `y`?
+
+```{r}
+n <- nrow(dat_1)
+D <- ncol(dat_1[,5:10])
+p0 <- 3
+tau0 <- p0/(D - p0) * 1/sqrt(n)
+prior_coeff <- hs(global_scale = tau0, slab_scale = 1)
+
+fit_1 <- stan_glm(y ~ x4 + x5 + x6 + x7 + x8 + x9,
+                  data = dat_1,
+                  prior = prior_coeff,
+                  refresh = 0,
+                  adapt_delta = 0.999)
+## Note: I use the same prior scale here because both data sets have the same number of observations
+## and the same expected number of important covariates
+##
+fit_2 <- stan_glm(y ~ x4 + x5 + x6 + x7 + x8 + x9,
+                  data = dat_2,
+                  prior = prior_coeff,
+                  refresh = 0,
+                  adapt_delta = 0.999)
+
+predict_1 <- posterior_predict(fit_1)
+predict_2 <- posterior_predict(fit_2)
+
+for.plot <- data.frame(Observed = dat_1$y, Predicted = apply(predict_1, 2, mean))
+p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "lm") +
+  ggtitle("Data set 1")
+print(p)
+
+for.plot <- data.frame(Observed = dat_2$y, Predicted = apply(predict_2, 2, mean))
+p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_smooth(method = "lm") +
+  ggtitle("Data set 2")
+print(p)
+
+p <- plot(fit_1) + ggtitle("Estimates from data set 1")
+print(p)
+p <- plot(fit_2) + ggtitle("Estimates from data set 2")
+print(p)
+
+summary(fit_1, digits = 3)
+summary(fit_2, digits = 3)
+
+new_data <- data.frame(x4 = 4.0, x5 = 4.0, x6 = 4.0,
+                       x7 = 4.0, x8 = 4.0, x9 = 4.0)
+
+predict_1 <- posterior_predict(fit_1, new_data)
+predict_2 <- posterior_predict(fit_2, new_data)
+
+summarize_posterior <- function(x, credible = 0.95, digits = 3) {
+  lo_p <- (1.0 - credible)/2.0
+  hi_p <- credible + lo_p
+  ci <- quantile(x, c(lo_p, hi_p))
+  cat(round(mean(x), 3), " (", round(ci[1], 3), ",", round(ci[2], 3), ")\n", sep = "")
+}
+
+summarize_posterior(predict_1)
+summarize_posterior(predict_2)
+```
+
+The results from analysis of data set 1 suggest (weakly) that `x4` and `x8` have a negative association with `y`, and that `x9` has a positive associations. That's right in the sense that (a) `x4` and `x8` are positively associated with `x2`, which we know has a negative influence on `y` and (b) `x9` is positively associated with both `x1` and `x3`, which we know have positive influences on `y`. In data set 2, `x4` and `x6` have a weakly supported negative association with `y`, while `x5` has more strongly supported positive association with `y`. Again, those associations are in the direction we'd expect. But the associations are weak. Our evidence for them is shaky.
+
+What happens if we try the projection predictions method for variable selection?
+
+```{r}
+projection_prediction <- function(dat) {
+  n <- nrow(dat)
+  D <- ncol(dat) - 1
+  p0 <- 3
+  tau0 <- p0/(D - p0) * 1/sqrt(n)
+  prior_coeff <- hs(global_scale = tau0, slab_scale = 1)
+  fit <- stan_glm(y ~ x4 + x5 + x6 + x7 + x8 + x9, data = dat, 
+                  prior = prior_coeff, refresh = 0)
+
+  vs <- varsel(fit, method = "forward")
+  cvs <- cv_varsel(fit, method = "forward", verbose = FALSE)
+
+  proj_size <- suggest_size(cvs)
+  proj <- project(vs, nv = proj_size, ns = 2000)
+  mcmc_intervals(as.matrix(proj))
+
+  pred <- proj_linpred(vs, xnew = dat[, -1], ynew = dat$y, 
+                       nv = proj_size, integrated = TRUE)
+  for.plot <- data.frame(Observed = dat$y,
+                         Predicted = pred$pred)
+  p <- ggplot(for.plot, aes(x = Observed, y = Predicted)) + 
+    geom_point() + 
+    geom_smooth(method = "lm") +
+    geom_abline(slope = 1, intercept = 0) +
+    labs(x = "Observed", y = "Predicted")
+  print(p)
+
+  return(list(proj = proj, vs = vs, cvs = cvs, proj_size = proj_size))
+}
+
+proj_1 <- projection_prediction(dat_1[, -c(2,3,4,11)])
+proj_2 <- projection_prediction(dat_2[, -c(2,3,4,11)])
+
+print(varsel_plot(proj_1$cvs, stats = c("elpd", "rmse"), deltas = TRUE))
+print(varsel_plot(proj_2$cvs, stats = c("elpd", "rmse"), deltas = TRUE))
+summarize_results(proj_1$proj)
+summarize_results(proj_2$proj)
+```
+
+I said that the data set 1 suggested some relationships weakly, and the projection predictions show that the relationships are so weak that we don't have good evidence for including any of them. There's reasonable evidence for including one covariate, `x5`, in the second data set, which means we don't have any indication of any negative associations with `y`.[^2]
+
+## Conclusions
+
+If associations among our covariates are relatively weak and we have a reasonable amount of data, it's tempting to think that associations we detect in our data are likely to be real. It's certainly the case that we're less likely to be misled when associations are wake, but try this simple thought experiment to realize why you should be cautious.
+
+Imagine that you're interested in how leaf mass per area (LMA) varies across environmental gradients. Suppose you're working in a mountainous region of the North Temperate Zone and that you include elevation as a covariate without including any covariates related to temperature (e.g., mean annual temperature, January minimum temperature, number of frost-free days). I suspect you;ll find a positive association between LMA and elevation, but I seriously doubt that it's elevation _per se_ that's important. Rather, I suspect that the relationship, assuming that it exists, would reflect the tight association between different aspects of temperature and elevation. Even if you included a temperature covariate, e.g., frost-free days, and you now found an association between LMA and frost-free days while the elevation association was now weak or non-existent, I'd suggest that you think very carefully before concluding that frost-free days _*really*_ matters. It might be one of several temperature-related covariates that matter, or it might simply be tightly associated with something else that really matters. In the absence of a controlled experiment or a very careful causal analysis,{^3} all we can really say from the data alone is that there's an association.  
+In short, I urge you to be very cautious in interpreting the results of a multiple regression. If the associations you identify have been found repeatedly in other data sets and there are good, principled reasons to believe that those associations arose through the process you are trying to attribute them to, I'd say you're on reasonably solid ground. The less often the associations you see have been seen before and the less they might have been predicted from first principles, the shakier is the ground on which you stand. But being cautious in interpreting the meaning of associations you find, doesn't mean that those associations are unimportant. Associations that appear important in your analysis are worth further study, and that further study may lead both to finding them repeatedly and developing an understanding of mechanisms and processes that could produce them.
+
+[^1]: You should find it pretty easy to try the Lasso using the least squares regression in `lm()` if you're so inclined.
+
+{^2]: I havern't tried running the models that exclude `x1`, `x2`, and `x3` with the strong associations (0.8 in the call to `rmvnorm()`), but I encourage you to try it on your own. I suspect you'll find some reasonably well supported associations if you do.
